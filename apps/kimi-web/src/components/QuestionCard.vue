@@ -1,6 +1,6 @@
 <!-- apps/kimi-web/src/components/QuestionCard.vue -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { UIQuestion } from '../types';
 import type { QuestionAnswer, QuestionResponse } from '../api/types';
@@ -41,6 +41,45 @@ function goNext(): void {
 // ---------------------------------------------------------------------------
 
 const answers = ref<Record<string, QuestionAnswer>>({});
+
+function isRecommendedOption(option: { label: string; description?: string; recommended?: boolean }): boolean {
+  if (option.recommended === true) return true;
+  return /\b(?:recommended|recommend)\b|推荐/.test(`${option.label} ${option.description ?? ''}`.toLowerCase());
+}
+
+function seedRecommendedAnswers(): void {
+  const next = { ...answers.value };
+  let changed = false;
+  for (const q of props.question.questions) {
+    if (next[q.id]) continue;
+    const recommended = q.options.filter(isRecommendedOption);
+    if (recommended.length === 0) continue;
+    next[q.id] = q.multiSelect
+      ? { kind: 'multi', optionIds: recommended.map((option) => option.id) }
+      : { kind: 'single', optionId: recommended[0]!.id };
+    changed = true;
+  }
+  if (changed) answers.value = next;
+}
+
+watch(
+  () => props.question.questionId,
+  () => {
+    step.value = 0;
+    minimized.value = false;
+    answers.value = {};
+    otherTexts.value = {};
+  },
+);
+
+watch(
+  () => props.question,
+  () => {
+    if (step.value >= props.question.questions.length) step.value = 0;
+    seedRecommendedAnswers();
+  },
+  { immediate: true, deep: true },
+);
 
 // Single-select: pick one optionId
 function pickSingle(qid: string, optionId: string): void {

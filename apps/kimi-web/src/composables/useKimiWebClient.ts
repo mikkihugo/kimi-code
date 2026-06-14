@@ -1392,6 +1392,7 @@ function toUiQuestion(q: AppQuestionRequest): UIQuestion {
         id: o.id,
         label: o.label,
         description: o.description,
+        recommended: o.recommended,
       })),
       multiSelect: qi.multiSelect,
       allowOther: qi.allowOther,

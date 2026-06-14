@@ -238,6 +238,7 @@ export interface QuestionOption {
   id: string;
   label: string;
   description?: string;
+  recommended?: boolean;
 }
 
 export interface QuestionItem {

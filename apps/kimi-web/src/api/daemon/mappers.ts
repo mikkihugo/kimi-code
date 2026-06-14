@@ -289,6 +289,7 @@ function toAppQuestionOption(wire: WireQuestionOption): QuestionOption {
     id: wire.id,
     label: wire.label,
     description: wire.description,
+    recommended: wire.recommended === true || wire.is_recommended === true,
   };
 }
 

@@ -235,7 +235,7 @@ export interface UIQuestion {
     question: string;
     header?: string;
     body?: string;
-    options: { id: string; label: string; description?: string }[];
+    options: { id: string; label: string; description?: string; recommended?: boolean }[];
     multiSelect?: boolean;
     allowOther?: boolean;
     otherLabel?: string;

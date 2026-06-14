@@ -232,6 +232,8 @@ export interface WireQuestionOption {
   id: string;
   label: string;
   description?: string;
+  recommended?: boolean;
+  is_recommended?: boolean;
 }
 
 export interface WireQuestionItem {
