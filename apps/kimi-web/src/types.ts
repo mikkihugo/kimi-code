@@ -79,6 +79,7 @@ export interface AgentMember {
   /** The prompt/task the subagent was given (from the Agent tool input). */
   prompt?: string;
   summary?: string;
+  outputLines?: string[];
   suspendedReason?: string;
   swarmIndex?: number;
 }

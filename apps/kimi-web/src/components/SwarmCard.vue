@@ -27,6 +27,10 @@ function bar(member: SwarmMember): string {
     case 'failed': return '!!....';
   }
 }
+
+function latestProgress(member: SwarmMember): string | undefined {
+  return member.outputLines?.map((line) => line.trimEnd()).filter(Boolean).at(-1);
+}
 </script>
 
 <template>
@@ -53,8 +57,8 @@ function bar(member: SwarmMember): string {
           <span class="member-bar">{{ bar(member) }}</span>
           <span v-if="member.subagentType" class="member-type">{{ member.subagentType }}</span>
         </div>
-        <div v-if="member.suspendedReason || member.summary" class="member-bottom">
-          {{ member.suspendedReason || member.summary }}
+        <div v-if="member.suspendedReason || latestProgress(member) || member.summary" class="member-bottom">
+          {{ member.suspendedReason || latestProgress(member) || member.summary }}
         </div>
       </article>
     </div>

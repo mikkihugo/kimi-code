@@ -150,6 +150,7 @@ function toAgentMember(task: AppTask): AgentMember {
       (task.status === 'completed' ? 'completed' : task.status === 'failed' ? 'failed' : 'working'),
     status: task.status,
     summary: task.outputPreview,
+    outputLines: task.outputLines,
     suspendedReason: task.suspendedReason,
     swarmIndex: task.swarmIndex,
   };

@@ -5,8 +5,15 @@ import type { AgentMember } from '../types';
 const props = defineProps<{ member: AgentMember; compact?: boolean }>();
 
 const expanded = ref(false);
+const progressLines = computed(() =>
+  (props.member.outputLines ?? [])
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .slice(-8),
+);
+const latestProgress = computed(() => progressLines.value.at(-1));
 const hasDetail = computed(() =>
-  Boolean(props.member.summary || props.member.suspendedReason || props.member.prompt),
+  Boolean(props.member.summary || props.member.suspendedReason || props.member.prompt || progressLines.value.length > 0),
 );
 
 function phaseLabel(phase: AgentMember['phase']): string {
@@ -29,8 +36,13 @@ function toggle(): void {
     <button class="agent-head" type="button" :disabled="!hasDetail" @click="toggle">
       <span class="agent-dot" aria-hidden="true"></span>
       <span class="agent-main">
-        <span class="agent-name">{{ member.name }}</span>
-        <span v-if="member.subagentType" class="agent-type">{{ member.subagentType }}</span>
+        <span class="agent-title-row">
+          <span class="agent-name">{{ member.name }}</span>
+          <span v-if="member.subagentType" class="agent-type">{{ member.subagentType }}</span>
+        </span>
+        <span v-if="latestProgress && (member.phase === 'queued' || member.phase === 'working' || member.phase === 'suspended')" class="agent-live">
+          {{ latestProgress }}
+        </span>
       </span>
       <span class="agent-phase">{{ phaseLabel(member.phase) }}</span>
       <svg
@@ -53,6 +65,12 @@ function toggle(): void {
       <div v-if="member.prompt" class="agent-field">
         <span class="agent-field-label">Task</span>
         <div class="agent-field-body">{{ member.prompt }}</div>
+      </div>
+      <div v-if="progressLines.length > 0" class="agent-field">
+        <span class="agent-field-label">Progress</span>
+        <div class="agent-field-body agent-progress">
+          <span v-for="(line, index) in progressLines" :key="index">{{ line }}</span>
+        </div>
       </div>
       <div v-if="member.summary" class="agent-field">
         <span class="agent-field-label">Result</span>
@@ -103,6 +121,12 @@ function toggle(): void {
   min-width: 0;
   flex: 1;
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-title-row {
+  min-width: 0;
+  display: flex;
   align-items: baseline;
   gap: 7px;
 }
@@ -118,6 +142,15 @@ function toggle(): void {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
+}
+.agent-live {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 .agent-phase {
   flex: none;
@@ -169,5 +202,12 @@ function toggle(): void {
 .agent-summary {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.agent-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--mono);
+  color: var(--text);
 }
 </style>

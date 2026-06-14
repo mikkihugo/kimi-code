@@ -212,6 +212,62 @@ function patchSubagent(
   return next;
 }
 
+function shortJson(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  try {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+function subagentProgressText(rawType: string, payload: Record<string, unknown>): string | null {
+  if (rawType === 'turn.step.started') return 'Started a step';
+  if (rawType === 'tool.use' || rawType === 'tool.call.started') {
+    const name = stringField(payload, 'name') ?? stringField(payload, 'toolName') ?? 'tool';
+    const args = shortJson(payload['args'] ?? payload['input']);
+    return args ? `Calling ${name}: ${args}` : `Calling ${name}`;
+  }
+  if (rawType === 'tool.progress') {
+    const update = payload['update'];
+    if (update && typeof update === 'object') {
+      const text = stringField(update as Record<string, unknown>, 'text');
+      if (text) return text;
+      const message = stringField(update as Record<string, unknown>, 'message');
+      if (message) return message;
+    }
+    const message = stringField(payload, 'message');
+    if (message) return message;
+  }
+  if (rawType === 'tool.result') {
+    const name = stringField(payload, 'name') ?? stringField(payload, 'toolName') ?? stringField(payload, 'toolCallId') ?? 'tool';
+    return `Finished ${name}`;
+  }
+  return null;
+}
+
+function projectSubagentProgress(
+  state: SessionState,
+  sessionId: string,
+  subagentId: string,
+  rawType: string,
+  payload: Record<string, unknown>,
+): AppEvent[] {
+  const text = subagentProgressText(rawType, payload);
+  if (text === null || text.length === 0) return [];
+  const previous = state.subagentMeta.get(subagentId);
+  const task = patchSubagent(state, sessionId, subagentId, {
+    status: 'running',
+    subagentPhase: 'working',
+    startedAt: previous?.startedAt ?? new Date().toISOString(),
+  });
+  const out: AppEvent[] = [];
+  if (task) out.push({ type: 'taskCreated', sessionId, task });
+  out.push({ type: 'taskProgress', sessionId, taskId: subagentId, outputChunk: text, stream: 'stdout' });
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Message-log helpers (inlined; mirrors message-log.ts)
 // ---------------------------------------------------------------------------
@@ -496,7 +552,7 @@ export function createAgentProjector(): AgentProjector {
       frameAgentId !== MAIN_AGENT_ID &&
       MAIN_AGENT_TRANSCRIPT_FRAMES.has(rawType)
     ) {
-      return out;
+      return projectSubagentProgress(s, sessionId, frameAgentId, rawType, p ?? {});
     }
 
     switch (rawType) {

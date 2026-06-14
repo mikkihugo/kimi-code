@@ -31,6 +31,7 @@ describe('messagesToTurns agent blocks', () => {
         subagentPhase: 'working',
         subagentType: 'coder',
         parentToolCallId: 'tc_agent',
+        outputLines: ['Reading files', 'Running tests'],
       },
     ];
 
@@ -42,6 +43,7 @@ describe('messagesToTurns agent blocks', () => {
         name: 'Review code',
         phase: 'working',
         subagentType: 'coder',
+        outputLines: ['Reading files', 'Running tests'],
       }),
     });
     expect(turns[0]?.tools).toBeUndefined();

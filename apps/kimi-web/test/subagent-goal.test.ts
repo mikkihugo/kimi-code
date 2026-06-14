@@ -82,11 +82,16 @@ describe('subagent and goal projection', () => {
     // A subagent turn streams over the SAME session id with its OWN agentId.
     // None of its transcript frames may produce parent-transcript events — they
     // used to open empty "skeleton" assistant bubbles + fragmented snippets.
-    expect(projector.project('turn.started', { turnId: 2, agentId: 'agent_1' }, sid)).toEqual([]);
-    expect(projector.project('turn.step.started', { turnId: 2, agentId: 'agent_1' }, sid)).toEqual([]);
+    const subTurn = projector.project('turn.started', { turnId: 2, agentId: 'agent_1' }, sid);
+    expect(subTurn.some((e) => e.type === 'messageCreated' || e.type === 'messageUpdated')).toBe(false);
+    const subStep = projector.project('turn.step.started', { turnId: 2, agentId: 'agent_1' }, sid);
+    expect(subStep.some((e) => e.type === 'messageCreated' || e.type === 'messageUpdated')).toBe(false);
+    expect(subStep.some((e) => e.type === 'taskProgress')).toBe(true);
     expect(projector.project('thinking.delta', { delta: 'sub thinking', agentId: 'agent_1' }, sid, { offset: 0 })).toEqual([]);
     expect(projector.project('assistant.delta', { delta: 'sub answer', agentId: 'agent_1' }, sid, { offset: 0 })).toEqual([]);
-    expect(projector.project('tool.use', { toolName: 'bash', toolCallId: 'tc_x', turnId: 2, agentId: 'agent_1' }, sid)).toEqual([]);
+    const subTool = projector.project('tool.use', { toolName: 'bash', toolCallId: 'tc_x', turnId: 2, agentId: 'agent_1' }, sid);
+    expect(subTool.some((e) => e.type === 'messageCreated' || e.type === 'messageUpdated')).toBe(false);
+    expect(subTool.some((e) => e.type === 'taskProgress')).toBe(true);
 
     // The main stream keeps appending to its OWN message: the subagent frames
     // did not hijack currentAssistantMsgId or the per-turn text offset.
@@ -96,6 +101,32 @@ describe('subagent and goal projection', () => {
     // The subagent lifecycle is still surfaced as a task (AgentCard path).
     const spawned = projector.project('subagent.spawned', { subagentId: 'agent_1', subagentName: 'coder', parentToolCallId: 'tc_x', description: 'sub' }, sid);
     expect(spawned.some((e) => e.type === 'taskCreated')).toBe(true);
+  });
+
+  it('projects subagent tool frames into task progress instead of the parent transcript', () => {
+    const projector = createAgentProjector();
+    const sid = 'ses_1';
+
+    projector.project('subagent.spawned', {
+      subagentId: 'agent_1',
+      subagentName: 'coder',
+      parentToolCallId: 'tc_agent',
+      description: 'Review code',
+    }, sid);
+
+    const events = projector.project('tool.call.started', {
+      agentId: 'agent_1',
+      turnId: 2,
+      toolCallId: 'tc_bash',
+      name: 'Bash',
+      args: { command: 'pnpm test' },
+    }, sid);
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'taskCreated', task: expect.objectContaining({ id: 'agent_1', subagentPhase: 'working' }) }),
+      expect.objectContaining({ type: 'taskProgress', taskId: 'agent_1', outputChunk: expect.stringContaining('Calling Bash') }),
+    ]);
+    expect(events.some((event) => event.type === 'messageCreated' || event.type === 'messageUpdated')).toBe(false);
   });
 
   it('stores active goals and clears complete/null goals in the reducer', () => {

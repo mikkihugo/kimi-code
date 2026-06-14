@@ -6,6 +6,7 @@ export interface SwarmMember {
   subagentType?: string;
   phase: AppSubagentPhase;
   summary?: string;
+  outputLines?: string[];
   suspendedReason?: string;
   swarmIndex: number;
 }
@@ -48,6 +49,7 @@ export function buildSwarmGroups(tasks: AppTask[]): SwarmGroup[] {
       subagentType: task.subagentType,
       phase: phaseForTask(task),
       summary: task.outputPreview,
+      outputLines: task.outputLines,
       suspendedReason: task.suspendedReason,
       swarmIndex: task.swarmIndex,
     });
