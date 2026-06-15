@@ -799,6 +799,11 @@ watch(
     filesShowPreview.value = false;
     selectedFile.value = null;
     following.value = true;
+    // Reset the scroll tracking baseline so the browser clamping scroll event
+    // that fires when the new (usually shorter) session renders is not mistaken
+    // for a user upward scroll, which would flip following back off before the
+    // stable-follow loop can pin the view to the bottom.
+    lastScrollTop = 0;
     await nextTick();
     scheduleStableFollow();
     updateTocViewport();

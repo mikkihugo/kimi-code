@@ -17,6 +17,7 @@ All other `@moonshot-ai/*` packages are treated as internal packages, including 
 2. **List packages that were actually changed.** Source code, build config, package metadata, and other changes that affect a package's output or behavior need a changeset entry for that package.
 3. **Do not list unchanged internal packages.** For example, if `packages/node-sdk` was not changed, do not list `@moonshot-ai/kimi-code-sdk` just because another internal package changed. The SDK follows the same rule as other internal packages: list it only when it was actually changed.
 4. **Internal package source changes that enter the CLI bundle must manually list the CLI.** `@moonshot-ai/kimi-code` inline-bundles `@moonshot-ai/*` source, but those internal packages are devDependencies from the CLI's perspective, so changesets will not automatically propagate bumps. If a change enters the CLI output, also list `@moonshot-ai/kimi-code`.
+   - **Web app (`@moonshot-ai/kimi-web`) changes always enter the CLI bundle.** `@moonshot-ai/kimi-web` is ignored by changesets (see `.changeset/config.json`), so it will not be bumped automatically. However, the CLI serves the web app from `dist-web`, so any source change in `apps/kimi-web` must list **both** `@moonshot-ai/kimi-web` and `@moonshot-ai/kimi-code` in the changeset. Otherwise `pkg.pr.new` and release builds will ship a stale web bundle.
 5. **Docs-only and tests-only changes usually do not need a changeset.** README, internal docs, and `test/` changes that do not enter package output do not trigger a CLI bump.
 6. `@moonshot-ai/vis` / `vis-server` / `vis-web` are ignored by changesets and should not be handled.
 
@@ -95,6 +96,17 @@ Only SDK source changed, and the CLI does not use it:
 ---
 
 Clarify session status typing for internal SDK callers.
+```
+
+Web app source changed (must also bump the CLI so the bundled web bundle is rebuilt):
+
+```markdown
+---
+"@moonshot-ai/kimi-web": patch
+"@moonshot-ai/kimi-code": patch
+---
+
+Fix the web chat not scrolling to the bottom after sending a message.
 ```
 
 ## Red Flags

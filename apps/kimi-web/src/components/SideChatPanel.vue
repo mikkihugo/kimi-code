@@ -4,12 +4,12 @@
      only show the messages exchanged here — a focused Q&A on the side. Reuses
      ChatPane for the transcript; its panel-open emits are no-ops here. -->
 <script setup lang="ts">
-import { nextTick, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ChatPane from './ChatPane.vue';
 import type { ChatTurn } from '../types';
 
-defineProps<{
+const props = defineProps<{
   turns: ChatTurn[];
   running: boolean;
   sending: boolean;
@@ -24,6 +24,7 @@ const { t } = useI18n();
 
 const draft = ref('');
 const inputRef = ref<HTMLTextAreaElement | null>(null);
+const bodyRef = ref<HTMLDivElement | null>(null);
 
 function submit(): void {
   const text = draft.value.trim();
@@ -32,8 +33,34 @@ function submit(): void {
   draft.value = '';
   void nextTick(() => {
     if (inputRef.value) inputRef.value.style.height = 'auto';
+    scrollToBottom();
   });
 }
+
+function scrollToBottom(): void {
+  const el = bodyRef.value;
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
+}
+
+const scrollKey = computed(() => {
+  const t = props.turns;
+  if (t.length === 0) return '0';
+  const last = t.at(-1)!;
+  const thinkingLen = last.thinking?.length ?? 0;
+  const toolsLen =
+    last.tools?.reduce(
+      (n, tool) => n + tool.name.length + (tool.arg?.length ?? 0) + (tool.output?.join('').length ?? 0),
+      0,
+    ) ?? 0;
+  return `${t.length}:${last.text.length}:${thinkingLen}:${toolsLen}`;
+});
+
+watch(scrollKey, async () => {
+  if (!props.running && !props.sending) return;
+  await nextTick();
+  scrollToBottom();
+});
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -60,7 +87,7 @@ function autosize(): void {
       </button>
     </div>
 
-    <div class="sc-body">
+    <div ref="bodyRef" class="sc-body">
       <div v-if="turns.length === 0" class="sc-empty">{{ t('sideChat.empty') }}</div>
       <ChatPane
         v-else
