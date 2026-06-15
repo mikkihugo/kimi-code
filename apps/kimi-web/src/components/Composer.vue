@@ -9,6 +9,7 @@ import { buildSlashItems, filterCommands, parseSlash } from '../lib/slashCommand
 import type { FileItem } from './MentionMenu.vue';
 import type { ActivationBadges, ConversationStatus, PermissionMode, QueuedPromptView } from '../types';
 import type { AppModel, AppSkill, ThinkingLevel } from '../api/types';
+import { modelThinkingAvailability } from '../lib/modelThinking';
 
 // ---------------------------------------------------------------------------
 // Attachment state
@@ -787,8 +788,23 @@ const ctxTooltip = computed(() => {
 const showCompact = computed(() => pct.value >= 80);
 
 // Thinking toggle
-const thinkingOn = computed(() => (props.thinking ?? 'off') !== 'off');
+const currentModel = computed(() => {
+  const raw = props.status?.modelId ?? props.status?.model ?? '';
+  return props.models?.find((m) =>
+    m.id === raw ||
+    m.model === raw ||
+    m.displayName === props.status?.model,
+  );
+});
+const thinkingAvailability = computed(() => modelThinkingAvailability(currentModel.value));
+const thinkingToggleable = computed(() => thinkingAvailability.value === 'toggle');
+const thinkingOn = computed(() => {
+  if (thinkingAvailability.value === 'always-on') return true;
+  if (thinkingAvailability.value === 'unsupported') return false;
+  return (props.thinking ?? 'off') !== 'off';
+});
 function toggleThinking(): void {
+  if (!thinkingToggleable.value) return;
   emit('setThinking', thinkingOn.value ? 'off' : 'high');
 }
 
@@ -852,11 +868,7 @@ const permLabel = computed(() => (permInfo.value ? t(permInfo.value.labelKey) : 
 // ---------------------------------------------------------------------------
 
 const currentProvider = computed(() => {
-  const name = props.status?.model ?? '';
-  const match = props.models?.find(
-    (m) => m.id === name || m.model === name || m.displayName === name,
-  );
-  return match?.provider ?? '';
+  return currentModel.value?.provider ?? '';
 });
 
 const providerModels = computed(() => {
@@ -1207,11 +1219,14 @@ function selectModel(modelId: string): void {
           <button
             class="md-row md-row-toggle"
             role="menuitem"
-            :class="{ 'is-on': thinkingOn }"
+            :class="{ 'is-on': thinkingOn, 'is-disabled': !thinkingToggleable }"
+            :disabled="!thinkingToggleable"
             @click="toggleThinking()"
           >
             <span class="md-check"><svg v-if="thinkingOn" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.5 3.5L13 4.5"/></svg></span>
             <span class="md-name">{{ t('status.thinkingLabel') }}</span>
+            <span v-if="thinkingAvailability === 'always-on'" class="md-note">{{ t('status.planOn') }}</span>
+            <span v-else-if="thinkingAvailability === 'unsupported'" class="md-note">{{ t('status.modeNotSupported') }}</span>
           </button>
 
           <div class="md-divider" />
@@ -1763,8 +1778,18 @@ function selectModel(modelId: string): void {
   text-align: left;
 }
 .md-row:hover { background: var(--soft); }
+.md-row:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+.md-row:disabled:hover { background: none; }
 .md-row.is-current { color: var(--ink); }
 .md-row.is-on { color: var(--blue); }
+.md-note {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--ui-font-size-xs);
+}
 
 .md-row-more {
   color: var(--blue);

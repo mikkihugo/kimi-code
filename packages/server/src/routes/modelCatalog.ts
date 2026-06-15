@@ -5,6 +5,7 @@ import {
   getProviderResponseSchema,
   listModelsResponseSchema,
   listProvidersResponseSchema,
+  refreshOAuthProviderModelsResponseSchema,
   setDefaultModelResponseSchema,
 } from '@moonshot-ai/protocol';
 import {
@@ -133,6 +134,28 @@ export function registerModelCatalogRoutes(
     listProvidersRoute.path,
     listProvidersRoute.options,
     listProvidersRoute.handler as Parameters<ModelCatalogRouteHost['get']>[2],
+  );
+
+  const refreshOAuthProvidersRoute = defineRoute(
+    {
+      method: 'POST',
+      path: '/providers:refresh_oauth',
+      success: { data: refreshOAuthProviderModelsResponseSchema },
+      description: 'Refresh OAuth-backed provider model metadata',
+      tags: ['providers'],
+      operationId: 'refreshOAuthProviderModels',
+    },
+    async (req, reply) => {
+      const result = await ix.invokeFunction((a) =>
+        a.get(IModelCatalogService).refreshOAuthProviderModels(),
+      );
+      reply.send(okEnvelope(result, req.id));
+    },
+  );
+  app.post(
+    refreshOAuthProvidersRoute.path,
+    refreshOAuthProvidersRoute.options,
+    refreshOAuthProvidersRoute.handler as Parameters<ModelCatalogRouteHost['post']>[2],
   );
 
   const getProviderRoute = defineRoute(

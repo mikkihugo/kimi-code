@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   CoreRPC,
@@ -7,6 +7,7 @@ import type {
   KimiConfigPatch,
   SetKimiConfigPayload,
 } from '@moonshot-ai/agent-core';
+import { KIMI_CODE_PROVIDER_NAME } from '@moonshot-ai/kimi-code-oauth';
 
 import {
   type ICoreProcessService,
@@ -17,6 +18,12 @@ import {
   toProtocolModel,
   toProtocolProvider,
 } from '../src';
+import type { ServicesAuthFacade } from '../src/auth/managedAuth';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 function makeEnv(): IEnvironmentService {
   return {
@@ -30,9 +37,11 @@ function makeCore(configRef: { current: KimiConfig }): {
   core: ICoreProcessService;
   getCalls: GetKimiConfigPayload[];
   setCalls: KimiConfigPatch[];
+  removeCalls: string[];
 } {
   const getCalls: GetKimiConfigPayload[] = [];
   const setCalls: KimiConfigPatch[] = [];
+  const removeCalls: string[] = [];
   const rpc: Partial<CoreRPC> = {
     getKimiConfig: vi.fn(async (payload: GetKimiConfigPayload) => {
       getCalls.push(payload);
@@ -40,12 +49,31 @@ function makeCore(configRef: { current: KimiConfig }): {
     }),
     setKimiConfig: vi.fn(async (payload: SetKimiConfigPayload) => {
       setCalls.push(payload);
-      if (payload.defaultModel !== undefined) {
-        configRef.current = {
-          ...configRef.current,
-          defaultModel: payload.defaultModel,
-        };
+      const next: KimiConfig = { ...configRef.current };
+      if (payload.providers !== undefined) {
+        next.providers = payload.providers as KimiConfig['providers'];
       }
+      if (payload.models !== undefined) {
+        next.models = payload.models as KimiConfig['models'];
+      }
+      if (payload.defaultModel !== undefined) next.defaultModel = payload.defaultModel;
+      if (payload.defaultThinking !== undefined) next.defaultThinking = payload.defaultThinking;
+      configRef.current = next;
+      return configRef.current;
+    }),
+    removeKimiProvider: vi.fn(async ({ providerId }) => {
+      removeCalls.push(providerId);
+      const providers = { ...configRef.current.providers };
+      delete providers[providerId];
+      const models = Object.fromEntries(
+        Object.entries(configRef.current.models ?? {}).filter(([, model]) => model.provider !== providerId),
+      ) as KimiConfig['models'];
+      configRef.current = {
+        ...configRef.current,
+        providers,
+        models,
+        defaultModel: undefined,
+      };
       return configRef.current;
     }),
   };
@@ -58,6 +86,18 @@ function makeCore(configRef: { current: KimiConfig }): {
     },
     getCalls,
     setCalls,
+    removeCalls,
+  };
+}
+
+function authFacade(accessToken = 'token-test'): ServicesAuthFacade {
+  return {
+    login: vi.fn(),
+    logout: vi.fn(),
+    getCachedAccessToken: vi.fn(async () => accessToken),
+    resolveOAuthTokenProvider: vi.fn(() => ({
+      getAccessToken: vi.fn(async () => accessToken),
+    })),
   };
 }
 
@@ -177,5 +217,62 @@ describe('ModelCatalogService', () => {
     await expect(svc.setDefaultModel('missing')).rejects.toBeInstanceOf(
       ModelNotFoundError,
     );
+  });
+
+  it('refreshes managed OAuth models and preserves always-thinking defaults', async () => {
+    const configRef: { current: KimiConfig } = {
+      current: {
+        providers: {
+          [KIMI_CODE_PROVIDER_NAME]: {
+            type: 'kimi',
+            apiKey: '',
+            baseUrl: 'https://api.example.test/coding/v1',
+            oauth: { storage: 'file', key: 'oauth/kimi-code' },
+          },
+        },
+        defaultModel: 'kimi-code/kimi-for-coding',
+        defaultThinking: false,
+        models: {
+          'kimi-code/kimi-for-coding': {
+            provider: KIMI_CODE_PROVIDER_NAME,
+            model: 'kimi-for-coding',
+            maxContextSize: 131_072,
+            capabilities: ['thinking'],
+          },
+        },
+      },
+    };
+    const { core, removeCalls, setCalls } = makeCore(configRef);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      data: [
+        {
+          id: 'kimi-for-coding',
+          context_length: 262_144,
+          supports_reasoning: true,
+          supports_thinking_type: 'only',
+          supports_image_in: false,
+          supports_video_in: false,
+        },
+      ],
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const svc = ModelCatalogService._createForTest(makeEnv(), core, authFacade());
+
+    await expect(svc.refreshOAuthProviderModels()).resolves.toMatchObject({
+      changed: [{ provider_id: KIMI_CODE_PROVIDER_NAME, added: 0, removed: 0 }],
+      failed: [],
+    });
+
+    expect(removeCalls).toEqual([KIMI_CODE_PROVIDER_NAME]);
+    expect(setCalls.at(-1)).toMatchObject({
+      defaultModel: 'kimi-code/kimi-for-coding',
+      defaultThinking: true,
+      models: {
+        'kimi-code/kimi-for-coding': {
+          capabilities: ['thinking', 'always_thinking', 'tool_use'],
+          maxContextSize: 262_144,
+        },
+      },
+    });
   });
 });

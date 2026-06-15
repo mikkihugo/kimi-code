@@ -375,6 +375,7 @@ async function openModelPicker(): Promise<void> {
   modelsUnavailable.value = false;
   showModelPicker.value = true;
   try {
+    await client.refreshOAuthProviderModels();
     await client.loadModels();
   } catch {
     modelsUnavailable.value = true;

@@ -33,6 +33,7 @@ import { readSessionIdFromLocation, sessionUrl } from '../lib/sessionRoute';
 import type { SessionUrlMode } from '../lib/sessionRoute';
 import { toAppEvent } from '../api/daemon/mappers';
 import { parseDiff } from '../lib/parseDiff';
+import { coerceThinkingForModel } from '../lib/modelThinking';
 import { messagesToTurns } from './messagesToTurns';
 import { latestTodos } from './latestTodos';
 import { buildSwarmGroups, countSwarmMembers } from './swarmGroups';
@@ -500,6 +501,25 @@ function recordMoonDelta(chars: number): void {
 // no backend session exists yet, so POST /profile has nothing to target).
 // Applied and cleared when the first prompt creates the session.
 const draftModel = ref<string | null>(null);
+
+function modelById(modelId: string | null | undefined): AppModel | undefined {
+  if (modelId === undefined || modelId === null || modelId.length === 0) return undefined;
+  return models.value.find((m) => m.id === modelId || m.model === modelId);
+}
+
+function activeThinkingModel(): AppModel | undefined {
+  const activeSession = rawState.activeSessionId
+    ? rawState.sessions.find((s) => s.id === rawState.activeSessionId)
+    : undefined;
+  return modelById(activeSession?.model ?? draftModel.value ?? rawState.defaultModel);
+}
+
+function applyThinkingLevel(level: ThinkingLevel): ThinkingLevel {
+  const next = coerceThinkingForModel(activeThinkingModel(), level);
+  rawState.thinking = next;
+  saveThinkingToStorage(next);
+  return next;
+}
 
 // ~/diff line-by-line view: the file the user tapped + its parsed unified diff.
 // Loaded on demand via loadFileDiff(); cleared when the file list is shown.
@@ -2962,9 +2982,8 @@ async function cancelTask(taskId: string): Promise<void> {
 /** Persist and apply a new extended-thinking level (also pushed to the active
  *  session profile so the daemon's /status reflects it; still sent per-prompt). */
 function setThinking(level: ThinkingLevel): void {
-  rawState.thinking = level;
-  saveThinkingToStorage(level);
-  persistSessionProfile({ thinking: level });
+  const next = applyThinkingLevel(level);
+  persistSessionProfile({ thinking: next });
 }
 
 /** Persist and apply plan mode (pushed to the session profile + sent per-prompt). */
@@ -3165,8 +3184,22 @@ async function loadModels(): Promise<void> {
   try {
     const api = getKimiWebApi();
     models.value = await api.listModels();
+    applyThinkingLevel(rawState.thinking);
   } catch (err) {
     pushOperationFailure('loadModels', err);
+  }
+}
+
+async function refreshOAuthProviderModels(): Promise<void> {
+  try {
+    const result = await getKimiWebApi().refreshOAuthProviderModels();
+    for (const failure of result.failed) {
+      pushOperationFailure('refreshOAuthProviderModels', new Error(failure.reason), {
+        message: failure.provider,
+      });
+    }
+  } catch {
+    // Older daemons may not expose this endpoint; model listing still works.
   }
 }
 
@@ -3189,18 +3222,28 @@ async function loadProviders(): Promise<void> {
  */
 async function setModel(modelId: string): Promise<void> {
   const sid = rawState.activeSessionId;
+  const nextThinking = coerceThinkingForModel(modelById(modelId), rawState.thinking);
+  const prevThinking = rawState.thinking;
   if (!sid) {
     // New-session draft (onboarding composer): no backend session to update.
     // Remember the pick — startSessionAndSendPrompt applies it at create time.
     draftModel.value = modelId;
+    applyThinkingLevel(nextThinking);
     return;
   }
   // Optimistic: show the chosen model immediately, but remember the previous
   // one so we can roll back if the switch never reaches the daemon.
   const prevModel = rawState.sessions.find((s) => s.id === sid)?.model;
   rawState.sessions = rawState.sessions.map((s) => (s.id === sid ? { ...s, model: modelId } : s));
+  if (nextThinking !== prevThinking) {
+    rawState.thinking = nextThinking;
+    saveThinkingToStorage(nextThinking);
+  }
   try {
-    await getKimiWebApi().updateSession(sid, { model: modelId });
+    await getKimiWebApi().updateSession(sid, {
+      model: modelId,
+      thinking: nextThinking !== prevThinking ? nextThinking : undefined,
+    });
   } catch (err) {
     // The model change rides HTTP, not the WS, so a dropped socket alone does
     // not fail it — but when the daemon is unreachable the request throws here.
@@ -3209,6 +3252,10 @@ async function setModel(modelId: string): Promise<void> {
     rawState.sessions = rawState.sessions.map((s) =>
       s.id === sid ? { ...s, model: prevModel ?? s.model } : s,
     );
+    if (nextThinking !== prevThinking) {
+      rawState.thinking = prevThinking;
+      saveThinkingToStorage(prevThinking);
+    }
     pushOperationFailure('setModel', err, { sessionId: sid });
     return;
   }
@@ -3742,6 +3789,7 @@ export function useKimiWebClient() {
     resolveImageUrl,
 
     // Model + Provider actions
+    refreshOAuthProviderModels,
     loadModels,
     loadProviders,
     skills,

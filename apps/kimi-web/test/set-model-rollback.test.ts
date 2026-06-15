@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AppSession, KimiEventHandlers, KimiWebApi } from '../src/api/types';
+import type { AppModel, AppSession, KimiEventHandlers, KimiWebApi } from '../src/api/types';
 
 const now = '2026-06-11T00:00:00.000Z';
 
@@ -27,7 +27,7 @@ function session(id: string, model: string): AppSession {
   };
 }
 
-async function setup(opts: { updateRejects: boolean }) {
+async function setup(opts: { updateRejects: boolean; models?: AppModel[] }) {
   vi.resetModules();
   vi.stubGlobal('WebSocket', class WebSocket {});
 
@@ -59,6 +59,7 @@ async function setup(opts: { updateRejects: boolean }) {
       if (patch.model) currentModel = patch.model;
       return session('sess_1', currentModel);
     }),
+    listModels: vi.fn(async () => opts.models ?? []),
     getSessionStatus: vi.fn(async () => ({
       model: currentModel,
       thinkingLevel: 'high',
@@ -82,6 +83,7 @@ async function setup(opts: { updateRejects: boolean }) {
   const { useKimiWebClient } = await import('../src/composables/useKimiWebClient');
   const client = useKimiWebClient();
   await client.createSession('/repo');
+  if (opts.models !== undefined) await client.loadModels();
   return { client, api };
 }
 
@@ -109,5 +111,38 @@ describe('setModel failure handling', () => {
     await client.setModel('model-new');
     expect(client.status.value.modelId).toBe('model-new');
     expect(client.warnings.value.length).toBe(0);
+  });
+
+  it('forces thinking on when switching to an always-thinking model', async () => {
+    const { client, api } = await setup({
+      updateRejects: false,
+      models: [
+        {
+          id: 'model-old',
+          provider: 'kimi',
+          model: 'model-old',
+          maxContextSize: 128_000,
+          capabilities: ['thinking'],
+        },
+        {
+          id: 'model-new',
+          provider: 'kimi',
+          model: 'model-new',
+          maxContextSize: 128_000,
+          capabilities: ['thinking', 'always_thinking'],
+        },
+      ],
+    });
+
+    client.setThinking('off');
+    expect(client.thinking.value).toBe('off');
+
+    await client.setModel('model-new');
+
+    expect(client.thinking.value).toBe('high');
+    expect(api.updateSession).toHaveBeenLastCalledWith('sess_1', {
+      model: 'model-new',
+      thinking: 'high',
+    });
   });
 });

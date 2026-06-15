@@ -515,6 +515,17 @@ export interface AppProvider {
   models?: string[];
 }
 
+export interface ProviderRefreshResult {
+  changed: Array<{
+    providerId: string;
+    providerName: string;
+    added: number;
+    removed: number;
+  }>;
+  unchanged: string[];
+  failed: Array<{ provider: string; reason: string }>;
+}
+
 /** A session-scoped skill the user can invoke from the slash menu. */
 export interface AppSkill {
   name: string;
@@ -586,6 +597,7 @@ export interface KimiWebApi {
   addProvider(input: { type: string; apiKey?: string; baseUrl?: string; defaultModel?: string }): Promise<AppProvider>;
   deleteProvider(id: string): Promise<{ deleted: true }>;
   refreshProvider(id: string): Promise<AppProvider>;
+  refreshOAuthProviderModels(): Promise<ProviderRefreshResult>;
 
   // File upload / download
   uploadFile(input: { file: Blob; name?: string }): Promise<{ id: string; name: string; mediaType: string; size: number }>;

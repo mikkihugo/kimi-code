@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { pino } from 'pino';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { IRestGateway, startServer, type RunningServer } from '../src';
+import { IModelCatalogService } from '@moonshot-ai/services';
+import type { IModelCatalogService as ModelCatalogServiceShape } from '@moonshot-ai/services';
+
+import { IRestGateway, startServer, type RunningServer, type ServerStartOptions } from '../src';
 
 let tmpDir: string;
 let lockPath: string;
@@ -29,13 +32,16 @@ afterEach(async () => {
   rmSync(bridgeHome, { recursive: true, force: true });
 });
 
-async function bootDaemon(): Promise<RunningServer> {
+async function bootDaemon(
+  serviceOverrides?: ServerStartOptions['serviceOverrides'],
+): Promise<RunningServer> {
   server = await startServer({
     host: '127.0.0.1',
     port: 0,
     lockPath,
     logger: pino({ level: 'silent' }),
     coreProcessOptions: { homeDir: bridgeHome },
+    serviceOverrides,
   });
   return server;
 }
@@ -221,5 +227,54 @@ describe('model/provider catalog routes', () => {
       payload: {},
     });
     expect(envelopeOf<unknown>(model.json()).code).toBe(40413);
+  });
+
+  it('refreshes OAuth provider models through the catalog route', async () => {
+    const stub: ModelCatalogServiceShape = {
+      _serviceBrand: undefined,
+      listModels: async () => [],
+      listProviders: async () => [],
+      getProvider: async () => {
+        throw new Error('unused');
+      },
+      setDefaultModel: async () => {
+        throw new Error('unused');
+      },
+      refreshOAuthProviderModels: async () => ({
+        changed: [
+          {
+            provider_id: 'managed:kimi-code',
+            provider_name: 'Kimi Code',
+            added: 1,
+            removed: 0,
+          },
+        ],
+        unchanged: [],
+        failed: [],
+      }),
+    };
+    const r = await bootDaemon([[IModelCatalogService, stub]]);
+
+    const res = await appOf(r).inject({
+      method: 'POST',
+      url: '/api/v1/providers:refresh_oauth',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const env = envelopeOf<unknown>(res.json());
+    expect(env.code).toBe(0);
+    expect(env.data).toEqual({
+      changed: [
+        {
+          provider_id: 'managed:kimi-code',
+          provider_name: 'Kimi Code',
+          added: 1,
+          removed: 0,
+        },
+      ],
+      unchanged: [],
+      failed: [],
+    });
   });
 });

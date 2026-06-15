@@ -8,6 +8,7 @@ import type {
   AppMessageRole,
   AppModel,
   AppProvider,
+  ProviderRefreshResult,
   AppSession,
   AppSkill,
   AppSessionCursor,
@@ -67,6 +68,7 @@ import type {
   WirePromptSubmitResult,
   WirePromptSteerResult,
   WireProvider,
+  WireProviderRefreshResult,
   WireSession,
   WireSessionRuntimeStatus,
   WireSessionSnapshot,
@@ -999,6 +1001,20 @@ export class DaemonKimiWebApi implements KimiWebApi {
       `/providers/${encodeURIComponent(id)}:refresh`,
     );
     return toAppProvider(data);
+  }
+
+  async refreshOAuthProviderModels(): Promise<ProviderRefreshResult> {
+    const data = await this.http.post<WireProviderRefreshResult>('/providers:refresh_oauth');
+    return {
+      changed: data.changed.map((item) => ({
+        providerId: item.provider_id,
+        providerName: item.provider_name,
+        added: item.added,
+        removed: item.removed,
+      })),
+      unchanged: data.unchanged,
+      failed: data.failed,
+    };
   }
 
   // -------------------------------------------------------------------------

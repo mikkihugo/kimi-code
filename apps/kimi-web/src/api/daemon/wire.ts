@@ -340,6 +340,17 @@ export interface WireProvider {
   models?: string[];
 }
 
+export interface WireProviderRefreshResult {
+  changed: Array<{
+    provider_id: string;
+    provider_name: string;
+    added: number;
+    removed: number;
+  }>;
+  unchanged: string[];
+  failed: Array<{ provider: string; reason: string }>;
+}
+
 // ---------------------------------------------------------------------------
 // Auth wire DTOs — REAL endpoints (GET /api/v1/auth, POST/GET/DELETE /api/v1/oauth/login, POST /api/v1/oauth/logout)
 // ---------------------------------------------------------------------------
