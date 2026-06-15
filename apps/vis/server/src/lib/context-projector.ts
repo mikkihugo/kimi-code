@@ -11,9 +11,13 @@ import type {
 export interface ProjectedMessage {
   lineNo: number;
   time?: number;
-  source: 'append_message' | 'compaction_summary';
+  source: 'append_message' | 'compaction_summary' | 'undo' | 'clear';
   message: ContextMessage;
   toolStepUuids: string[];
+  /** Set only when source === 'undo'. */
+  undo?: { count: number; removedMessageCount: number };
+  /** Set only on the summary bubble of source === 'compaction_summary'. */
+  compaction?: { compactedCount: number; tokensBefore: number; tokensAfter: number };
 }
 
 export interface UsageTotals {
@@ -29,12 +33,30 @@ export interface ConfigSnapshot {
   systemPrompt?: string;
 }
 
+export interface GoalSnapshot {
+  goalId: string;
+  objective: string;
+  completionCriterion?: string;
+  status?: string;
+  actor?: string;
+  reason?: string;
+  tokensUsed?: number;
+  turnsUsed?: number;
+  wallClockMs?: number;
+}
+
 export interface ContextProjection {
   messages: ProjectedMessage[];
   usage: UsageTotals;
+  /** Absolute current context-window fill from the latest step.end.usage,
+   *  mirroring agent-core ContextMemory._tokenCount. Distinct from the
+   *  cumulative `usage` totals. */
+  contextTokens: number;
   config: ConfigSnapshot;
   permission: { mode: PermissionMode | null };
   planMode: { active: boolean; id?: string };
+  goal: GoalSnapshot | null;
+  swarm: { active: boolean; trigger?: string };
 }
 
 const ZERO: TokenUsage = { inputOther: 0, output: 0, inputCacheRead: 0, inputCacheCreation: 0 };
@@ -54,8 +76,28 @@ const ZERO: TokenUsage = { inputOther: 0, output: 0, inputCacheRead: 0, inputCac
  *
  *  Without this loop-event reconstruction the timeline would only
  *  show user prompts — agent-core does not emit a synthetic
- *  `context.append_message` for assistant turns. */
-export function projectContext(entries: ReadonlyArray<WireEntry>): ContextProjection {
+ *  `context.append_message` for assistant turns.
+ *
+ *  `mode` selects between two views of the four destructive lifecycle
+ *  events (compaction / undo / clear / micro-compaction):
+ *
+ *  - `'model'` (default): faithfully mirrors what the model currently
+ *    sees — compaction drops the compacted prefix, undo splices removed
+ *    messages out, clear empties the list, micro-compaction blanks old
+ *    tool results. All existing behaviour.
+ *  - `'full'`: full reconstructed history for debugging — the same four
+ *    events insert an INLINE MARKER but do NOT mutate/drop the message
+ *    list, so messages compacted/undone/cleared away stay visible and
+ *    micro-compacted tool results keep their original content.
+ *
+ *  Everything else (append_message, loop events, goal/swarm/permission/
+ *  plan/config/usage/contextTokens derived state) is identical in both
+ *  modes — `mode` only affects the `messages` array and which markers
+ *  appear. */
+export function projectContext(
+  entries: ReadonlyArray<WireEntry>,
+  mode: 'model' | 'full' = 'model',
+): ContextProjection {
   let messages: ProjectedMessage[] = [];
   const usage: UsageTotals = {
     byScope: { session: { ...ZERO }, turn: { ...ZERO } },
@@ -65,6 +107,10 @@ export function projectContext(entries: ReadonlyArray<WireEntry>): ContextProjec
   let permissionMode: PermissionMode | null = null;
   let planActive = false;
   let planId: string | undefined;
+  let contextTokens = 0;
+  let goal: GoalSnapshot | null = null;
+  let swarm: { active: boolean; trigger?: string } = { active: false };
+  let microCutoff = 0;
   // Maps step.uuid → the assistant ProjectedMessage that step is filling in.
   // Cleared on context.clear / context.apply_compaction.
   let openSteps = new Map<string, ProjectedMessage>();
@@ -120,6 +166,16 @@ export function projectContext(entries: ReadonlyArray<WireEntry>): ContextProjec
             });
           }
         } else if (ev.type === 'step.end') {
+          // Absolute context-window fill, mirroring agent-core
+          // ContextMemory._tokenCount: the latest step.end usage REPLACES the
+          // snapshot (it is not cumulative — see Task P1.7 note on byScope).
+          if ('usage' in ev && ev.usage !== undefined) {
+            contextTokens =
+              ev.usage.inputCacheRead +
+              ev.usage.inputCacheCreation +
+              ev.usage.inputOther +
+              ev.usage.output;
+          }
           openSteps.delete(ev.uuid);
         } else if (ev.type === 'tool.result') {
           const output = ev.result.output;
@@ -145,18 +201,39 @@ export function projectContext(entries: ReadonlyArray<WireEntry>): ContextProjec
         break;
       }
       case 'context.clear':
-        messages = [];
-        openSteps = new Map();
+        if (mode === 'model') {
+          messages = [];
+          openSteps = new Map();
+          // Mirror agent-core clear() → microCompaction.reset() (cutoff → 0):
+          // the message indices are wiped, so any prior cutoff is meaningless.
+          microCutoff = 0;
+        } else {
+          // Full history: keep all preceding messages and openSteps as-is, just
+          // append a synthetic 'clear' marker inline. The original tool results
+          // stay un-blanked, so the cutoff is not applied (the end-of-loop
+          // blanking pass is gated on model mode).
+          messages.push({
+            lineNo: entry.lineNo,
+            time: rec.time,
+            source: 'clear',
+            // Synthetic marker: never rendered as a bubble (the web dispatches on
+            // `source === 'clear'`). `role: 'assistant'` keeps it out of any
+            // role-counting / tool-blanking path.
+            message: { role: 'assistant', content: [], toolCalls: [] } as ContextMessage,
+            toolStepUuids: [],
+          });
+        }
         break;
-      case 'context.apply_compaction':
+      case 'context.apply_compaction': {
         openSteps = new Map();
-        // Mirror agent-core's actual `applyCompaction` behaviour: the
-        // summary is inserted as an *assistant* message tagged with
-        // `origin.kind = 'compaction_summary'` (see
-        // `packages/agent-core/src/agent/context/index.ts`). Using
-        // 'system' here would skew role counts and any downstream tool
-        // that diffs the projected timeline against agent-core history.
-        messages = [{
+        // Mirror agent-core's actual `applyCompaction` behaviour
+        // (`packages/agent-core/src/agent/context/index.ts`): history becomes
+        // `[summaryBubble, ...history.slice(compactedCount)]`. The summary is
+        // an *assistant* message tagged `origin.kind = 'compaction_summary'`
+        // (using 'system' would skew role counts and any downstream diff
+        // against agent-core history). The post-compaction tail is preserved
+        // rather than dropped, so messages still in context stay visible.
+        const summaryBubble: ProjectedMessage = {
           lineNo: entry.lineNo,
           time: rec.time,
           source: 'compaction_summary',
@@ -167,9 +244,30 @@ export function projectContext(entries: ReadonlyArray<WireEntry>): ContextProjec
             origin: { kind: 'compaction_summary' },
           } as ContextMessage,
           toolStepUuids: [],
-        }];
+          compaction: {
+            compactedCount: rec.compactedCount,
+            tokensBefore: rec.tokensBefore,
+            tokensAfter: rec.tokensAfter,
+          },
+        };
+        if (mode === 'model') {
+          messages = [summaryBubble, ...messages.slice(rec.compactedCount)];
+        } else {
+          // Full history: keep ALL preceding messages, just append the summary
+          // marker inline so the compacted prefix stays visible.
+          messages.push(summaryBubble);
+        }
+        // Mirror agent-core applyCompaction() → microCompaction.reset() (cutoff
+        // → 0): the message list is rebuilt as [summary, ...tail], so the old
+        // index-based cutoff no longer points at the same messages. (In full
+        // mode the blanking pass does not run, so this is a no-op there.)
+        microCutoff = 0;
         break;
+      }
       case 'usage.record': {
+        // byScope keeps per-scope cumulative spend. This is NOT the live context-window
+        // fill — that is `contextTokens` (latest step.end.usage). The web TokenBar shows
+        // contextTokens; byScope/byModel are for the cumulative breakdown only.
         const scope = (rec.usageScope ?? 'session') as 'session' | 'turn';
         addUsage(usage.byScope[scope], rec.usage);
         if (!usage.byModel[rec.model]) usage.byModel[rec.model] = { ...ZERO };
@@ -193,17 +291,140 @@ export function projectContext(entries: ReadonlyArray<WireEntry>): ContextProjec
       case 'plan_mode.cancel':
       case 'plan_mode.exit':
         planActive = false; planId = undefined; break;
-      default:
+      case 'context.undo': {
+        // Mirror agent-core `undo` (`agent/context/index.ts`): walk from the
+        // end, skip `origin.kind === 'injection'`, stop at
+        // `origin.kind === 'compaction_summary'`, remove others, counting real
+        // user prompts via `isRealUserPrompt` until `count` is reached. Then
+        // leave an undo marker.
+        //
+        // `computeUndoCutoff` is the single source of truth for that skip/stop
+        // walk (shared by both modes); only the actual removal is gated on
+        // `'model'` mode.
+        const { cutoff, removedMessageCount } = computeUndoCutoff(messages, rec.count);
+        if (mode === 'model') {
+          // Remove everything from `cutoff` onward EXCEPT injections, which the
+          // walk skips (they survive even when inside the undo window). Using
+          // the same `origin.kind === 'injection'` predicate keeps removal in
+          // lockstep with the counting walk above.
+          messages = messages.filter(
+            (pm, i) => i < cutoff || pm.message.origin?.kind === 'injection',
+          );
+          openSteps = new Map();
+          // Mirror agent-core undo() → microCompaction.reset(this._history.length):
+          // clamp the cutoff to the post-undo message count so a later append does
+          // not get blanked by a now-too-large stale cutoff. (Clamp before pushing
+          // the undo marker, which is a non-tool pseudo-message and unaffected by
+          // blanking regardless.)
+          microCutoff = Math.min(microCutoff, messages.length);
+        }
+        // In 'full' mode: do NOT remove — keep the undone messages and openSteps
+        // as-is, only push the undo marker. `removedMessageCount` still reflects
+        // what WOULD have been removed.
+        messages.push({
+          lineNo: entry.lineNo,
+          time: rec.time,
+          source: 'undo',
+          // Synthetic message: never rendered. The web dispatches on
+          // `source === 'undo'`; this only satisfies ProjectedMessage.
+          // `role: 'assistant'` is deliberate so this marker can never match the
+          // `role: 'tool'` micro-compaction blanking gate — keep it non-tool if
+          // you ever change the placeholder.
+          message: { role: 'assistant', content: [], toolCalls: [] } as ContextMessage,
+          toolStepUuids: [],
+          undo: { count: rec.count, removedMessageCount },
+        });
         break;
+      }
+      case 'micro_compaction.apply':
+        // Track the latest cutoff; the actual content blanking is applied
+        // after the loop (mirrors agent-core MicroCompaction.compact, which
+        // runs over the full history at projection time).
+        microCutoff = rec.cutoff;
+        break;
+      case 'goal.create':
+        goal = {
+          goalId: rec.goalId,
+          objective: rec.objective,
+          completionCriterion: rec.completionCriterion,
+        };
+        break;
+      case 'goal.update':
+        if (goal !== null) {
+          const prev: GoalSnapshot = goal;
+          goal = {
+            ...prev,
+            status: rec.status ?? prev.status,
+            actor: rec.actor ?? prev.actor,
+            reason: rec.reason ?? prev.reason,
+            tokensUsed: rec.tokensUsed ?? prev.tokensUsed,
+            turnsUsed: rec.turnsUsed ?? prev.turnsUsed,
+            wallClockMs: rec.wallClockMs ?? prev.wallClockMs,
+          };
+        }
+        break;
+      case 'goal.clear':
+        goal = null;
+        break;
+      case 'swarm_mode.enter':
+        swarm = { active: true, trigger: rec.trigger };
+        break;
+      case 'swarm_mode.exit':
+        swarm = { active: false };
+        break;
+      // Kinds that don't affect the projected timeline / derived state:
+      case 'metadata':
+      case 'forked':
+      case 'turn.prompt':
+      case 'turn.steer':
+      case 'turn.cancel':
+      case 'permission.record_approval_result':
+      case 'full_compaction.begin':
+      case 'full_compaction.cancel':
+      case 'full_compaction.complete':
+      case 'tools.register_user_tool':
+      case 'tools.unregister_user_tool':
+      case 'tools.set_active_tools':
+      case 'tools.update_store':
+        break;
+      default: {
+        const _exhaustive: never = rec;
+        void _exhaustive;
+        break;
+      }
+    }
+  }
+
+  // Micro-compaction blanking (mirrors agent-core MicroCompaction.compact):
+  // blank any message at index < cutoff that is a `role: 'tool'` result with a
+  // defined toolCallId and content large enough (≥ the min-content gate),
+  // replacing its content with the truncation marker. This rewrite is the
+  // model's-eye view, so it runs ONLY in 'model' mode — in 'full' mode the
+  // original tool results are shown un-blanked.
+  if (mode === 'model' && microCutoff > 0) {
+    for (let i = 0; i < messages.length && i < microCutoff; i++) {
+      const pm = messages[i];
+      if (pm === undefined) continue;
+      const m = pm.message;
+      if (
+        m.role === 'tool' &&
+        m.toolCallId !== undefined &&
+        estimateContentTokens(m.content) >= MICRO_MIN_CONTENT_TOKENS
+      ) {
+        pm.message = { ...m, content: [{ type: 'text', text: MICRO_TRUNCATED_MARKER }] };
+      }
     }
   }
 
   return {
     messages,
     usage,
+    contextTokens,
     config,
     permission: { mode: permissionMode },
     planMode: { active: planActive, id: planId },
+    goal,
+    swarm,
   };
 }
 
@@ -212,4 +433,76 @@ function addUsage(into: TokenUsage, src: TokenUsage): void {
   (into as any).output += src.output;
   (into as any).inputCacheRead += src.inputCacheRead;
   (into as any).inputCacheCreation += src.inputCacheCreation;
+}
+
+const MICRO_TRUNCATED_MARKER = '[Old tool result content cleared]';
+const MICRO_MIN_CONTENT_TOKENS = 100;
+
+/** Replicates agent-core's per-char token weighting exactly, over the same
+ *  `text` + `think` parts its gate counts. agent-core
+ *  (`packages/agent-core/src/utils/tokens.ts`) sums per-part estimates, each
+ *  `estimateTokens(s) = Math.ceil(asciiCount / 4) + nonAsciiCount` (ASCII ~4
+ *  chars/token, every non-ASCII/CJK code point a full token); other part types
+ *  contribute 0. Matching it ensures Chinese-heavy tool results blank at the
+ *  same gate as the agent. */
+function estimateTokens(text: string): number {
+  let asciiCount = 0;
+  let nonAsciiCount = 0;
+  for (const char of text) {
+    if (char.codePointAt(0)! <= 127) {
+      asciiCount++;
+    } else {
+      nonAsciiCount++;
+    }
+  }
+  return Math.ceil(asciiCount / 4) + nonAsciiCount;
+}
+
+function estimateContentTokens(content: readonly ContentPart[]): number {
+  let total = 0;
+  for (const p of content) {
+    if (p.type === 'text') total += estimateTokens(p.text);
+    else if (p.type === 'think') total += estimateTokens(p.think);
+  }
+  return total;
+}
+
+/** Mirrors agent-core `isRealUserPrompt` (`agent/context/index.ts`): a message
+ *  counts toward an undo only if it is a genuine user prompt. */
+function isRealUserPrompt(message: ContextMessage): boolean {
+  if (message.role !== 'user') return false;
+  const origin = message.origin;
+  if (origin === undefined || origin.kind === 'user') return true;
+  if (origin.kind === 'skill_activation') return origin.trigger === 'user-slash';
+  return false;
+}
+
+/** Single source of truth for the `context.undo` backward walk, shared by both
+ *  projection modes. Mirrors agent-core `undo` (`agent/context/index.ts`): walk
+ *  from the end, skip `origin.kind === 'injection'` (those are KEPT even when
+ *  they sit inside the undo window), stop at `origin.kind === 'compaction_summary'`,
+ *  and count real user prompts via `isRealUserPrompt` until `count` is reached.
+ *
+ *  Returns the `cutoff` (lowest index to remove from, inclusive) plus the
+ *  `removedMessageCount` (number of non-skipped messages in the window). In
+ *  `'model'` mode the caller removes everything from `cutoff` onward EXCEPT
+ *  injections; in `'full'` mode only `removedMessageCount` is reported on the
+ *  undo marker (no removal). Defining the skip/stop predicate exactly once here
+ *  keeps the two modes from drifting. */
+function computeUndoCutoff(
+  messages: readonly ProjectedMessage[],
+  count: number,
+): { cutoff: number; removedMessageCount: number } {
+  let removedUserCount = 0;
+  let removedMessageCount = 0;
+  let cutoff = messages.length;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const origin = messages[i]?.message.origin;
+    if (origin?.kind === 'injection') continue; // skip, keep
+    if (origin?.kind === 'compaction_summary') break; // stop
+    removedMessageCount++;
+    cutoff = i;
+    if (isRealUserPrompt(messages[i]!.message) && ++removedUserCount >= count) break;
+  }
+  return { cutoff, removedMessageCount };
 }

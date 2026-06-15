@@ -41,9 +41,6 @@ export function wireRoute(): Hono {
       });
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg.toLowerCase().includes('unsupported protocol')) {
-        return c.json({ error: msg, code: 'UNSUPPORTED_PROTOCOL' }, 400);
-      }
       return c.json({ error: msg, code: 'READ_ERROR' }, 500);
     }
   });

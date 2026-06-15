@@ -153,4 +153,344 @@ describe('context-projector', () => {
     expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: 'old stuff' });
     expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: 'new' });
   });
+
+  it('apply_compaction keeps the post-compaction tail (slice(compactedCount))', () => {
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'm0' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'm1' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 3, data: { type: 'context.append_message' as const,
+          message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'm2 (kept)' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 4, data: { type: 'context.apply_compaction' as const,
+          summary: 'sum', compactedCount: 2, tokensBefore: 100, tokensAfter: 10 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    // [summary, m2] — m0 and m1 (the first compactedCount=2) are dropped, m2 kept.
+    expect(proj.messages).toHaveLength(2);
+    expect(proj.messages[0]!.source).toBe('compaction_summary');
+    expect(proj.messages[0]!.compaction).toEqual({ compactedCount: 2, tokensBefore: 100, tokensAfter: 10 });
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: 'm2 (kept)' });
+    expect(proj.messages[1]!.lineNo).toBe(3);
+  });
+
+  it('context.undo removes back to the Nth real user prompt and leaves an undo marker', () => {
+    const userMsg = (text: string) => ({
+      role: 'user' as const, content: [{ type: 'text' as const, text }], toolCalls: [],
+      origin: { kind: 'user' as const },
+    });
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: userMsg('u1') }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const,
+          message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'a1' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 3, data: { type: 'context.append_message' as const, message: userMsg('u2') }, raw: {} },
+      { lineNo: 4, data: { type: 'context.undo' as const, count: 1 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    // count=1 removes u2 (the last real user prompt). u1 + a1 remain, then an undo marker.
+    expect(proj.messages.map((m) => m.source)).toEqual(['append_message', 'append_message', 'undo']);
+    expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: 'u1' });
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: 'a1' });
+    expect(proj.messages[2]!.undo).toEqual({ count: 1, removedMessageCount: 1 });
+    expect(proj.messages[2]!.lineNo).toBe(4);
+  });
+
+  it('context.undo keeps injection messages inside the undo window (skip, not remove)', () => {
+    const userMsg = (text: string) => ({
+      role: 'user' as const, content: [{ type: 'text' as const, text }], toolCalls: [],
+      origin: { kind: 'user' as const },
+    });
+    const injectionMsg = (text: string) => ({
+      role: 'user' as const, content: [{ type: 'text' as const, text }], toolCalls: [],
+      origin: { kind: 'injection' as const },
+    });
+    // Layout: [u1, a1, u2, INJECTION, a2]. undo(1) walks from the end:
+    //   a2  → removed (non-injection)
+    //   INJECTION → skipped (kept), NOT counted
+    //   u2  → removed, real user prompt → count(1) reached → stop.
+    // The injection sits INSIDE the undo window (between the trailing real user
+    // prompt u2 and the cutoff) and must SURVIVE; u2 and a2 around it are gone.
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: userMsg('u1') }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const,
+          message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'a1' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 3, data: { type: 'context.append_message' as const, message: userMsg('u2') }, raw: {} },
+      { lineNo: 4, data: { type: 'context.append_message' as const, message: injectionMsg('inj') }, raw: {} },
+      { lineNo: 5, data: { type: 'context.append_message' as const,
+          message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'a2' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 6, data: { type: 'context.undo' as const, count: 1 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    // u1, a1 remain; the injection survives in place; u2 + a2 removed; undo marker last.
+    expect(proj.messages.map((m) => m.source)).toEqual([
+      'append_message', 'append_message', 'append_message', 'undo',
+    ]);
+    expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: 'u1' });
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: 'a1' });
+    expect(proj.messages[2]!.message.origin).toEqual({ kind: 'injection' });
+    expect(proj.messages[2]!.message.content[0]).toMatchObject({ text: 'inj' });
+    // removedMessageCount counts only the removed (non-skipped) messages: u2 + a2 = 2.
+    expect(proj.messages[3]!.undo).toEqual({ count: 1, removedMessageCount: 2 });
+  });
+
+  it('micro_compaction.apply blanks tool-result content before the cutoff', () => {
+    const bigText = 'x'.repeat(2000); // comfortably above the 100-token min
+    const toolMsg = (id: string, text: string) => ({
+      role: 'tool' as const, content: [{ type: 'text' as const, text }], toolCalls: [], toolCallId: id,
+    });
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: toolMsg('c0', bigText) }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const, message: toolMsg('c1', bigText) }, raw: {} },
+      { lineNo: 3, data: { type: 'micro_compaction.apply' as const, cutoff: 1 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    // index 0 < cutoff(1) and is a large tool message → blanked; index 1 kept.
+    expect(proj.messages[0]!.message.content).toEqual([{ type: 'text', text: '[Old tool result content cleared]' }]);
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: bigText });
+  });
+
+  it('micro_compaction.apply counts think parts toward the min-content gate', () => {
+    // A tool result dominated by a large `think` part (tiny text) must clear the
+    // min-content gate and be blanked — mirroring agent-core's token estimator,
+    // which counts both text and think parts.
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: {
+          role: 'tool' as const, toolCallId: 'c0', toolCalls: [],
+          content: [
+            { type: 'text' as const, text: 'ok' },
+            { type: 'think' as const, think: 'y'.repeat(2000) },
+          ],
+        } }, raw: {} },
+      { lineNo: 2, data: { type: 'micro_compaction.apply' as const, cutoff: 1 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    expect(proj.messages[0]!.message.content).toEqual([{ type: 'text', text: '[Old tool result content cleared]' }]);
+  });
+
+  it('micro_compaction.apply weights non-ASCII (CJK) chars as full tokens', () => {
+    // ~150 CJK chars. Under a naive chars/4 estimate this is ~38 tokens (< 100
+    // gate → NOT blanked, the bug). agent-core counts each non-ASCII char as a
+    // full token → ~150 tokens (>= gate → blanked). Assert it IS blanked, so a
+    // Chinese-heavy tool result diverges from agent-core no longer.
+    const cjk = '中'.repeat(150);
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: {
+          role: 'tool' as const, toolCallId: 'c0', toolCalls: [],
+          content: [{ type: 'text' as const, text: cjk }],
+        } }, raw: {} },
+      { lineNo: 2, data: { type: 'micro_compaction.apply' as const, cutoff: 1 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    expect(proj.messages[0]!.message.content).toEqual([{ type: 'text', text: '[Old tool result content cleared]' }]);
+  });
+
+  it('context.clear resets the micro-compaction cutoff (no stale blanking)', () => {
+    const bigText = 'x'.repeat(2000);
+    const toolMsg = (id: string, text: string) => ({
+      role: 'tool' as const, content: [{ type: 'text' as const, text }], toolCalls: [], toolCallId: id,
+    });
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: toolMsg('c0', bigText) }, raw: {} },
+      { lineNo: 2, data: { type: 'micro_compaction.apply' as const, cutoff: 1 }, raw: {} },
+      { lineNo: 3, data: { type: 'context.clear' as const }, raw: {} },
+      { lineNo: 4, data: { type: 'context.append_message' as const, message: toolMsg('n0', bigText) }, raw: {} },
+      { lineNo: 5, data: { type: 'context.append_message' as const, message: toolMsg('n1', bigText) }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    // clear() ran reset() → cutoff back to 0, so the new tool messages must NOT be blanked.
+    expect(proj.messages).toHaveLength(2);
+    expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: bigText });
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: bigText });
+  });
+
+  it('context.apply_compaction resets the micro-compaction cutoff', () => {
+    const bigText = 'x'.repeat(2000);
+    const toolMsg = (id: string, text: string) => ({
+      role: 'tool' as const, content: [{ type: 'text' as const, text }], toolCalls: [], toolCallId: id,
+    });
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: toolMsg('c0', bigText) }, raw: {} },
+      { lineNo: 2, data: { type: 'micro_compaction.apply' as const, cutoff: 1 }, raw: {} },
+      { lineNo: 3, data: { type: 'context.apply_compaction' as const,
+          summary: 'sum', compactedCount: 1, tokensBefore: 100, tokensAfter: 10 }, raw: {} },
+      { lineNo: 4, data: { type: 'context.append_message' as const, message: toolMsg('n0', bigText) }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    // applyCompaction() ran reset() → cutoff back to 0. Result: [summary, n0].
+    // n0 must NOT be blanked.
+    expect(proj.messages).toHaveLength(2);
+    expect(proj.messages[0]!.source).toBe('compaction_summary');
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: bigText });
+  });
+
+  it('context.undo clamps the micro-compaction cutoff to the post-undo length', () => {
+    const bigText = 'x'.repeat(2000);
+    const toolMsg = (id: string, text: string) => ({
+      role: 'tool' as const, content: [{ type: 'text' as const, text }], toolCalls: [], toolCallId: id,
+    });
+    const userMsg = (text: string) => ({
+      role: 'user' as const, content: [{ type: 'text' as const, text }], toolCalls: [],
+      origin: { kind: 'user' as const },
+    });
+    // Layout: [tool c0, user u1, tool c2]. cutoff=3 covers all three. undo(1)
+    // removes the trailing real user prompt u1 AND the messages after it (c2),
+    // walking from the end: c2 (removed, not a user prompt), u1 (removed, user
+    // prompt → count reached). Remaining: [c0, undo-marker]. The cutoff must be
+    // clamped to min(3, postLen) so a LATER appended tool message is not blanked
+    // by the stale large cutoff.
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: toolMsg('c0', bigText) }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const, message: userMsg('u1') }, raw: {} },
+      { lineNo: 3, data: { type: 'context.append_message' as const, message: toolMsg('c2', bigText) }, raw: {} },
+      { lineNo: 4, data: { type: 'micro_compaction.apply' as const, cutoff: 3 }, raw: {} },
+      { lineNo: 5, data: { type: 'context.undo' as const, count: 1 }, raw: {} },
+      // appended AFTER undo: index 2 in the final list ([c0, undo-marker, n0]).
+      { lineNo: 6, data: { type: 'context.append_message' as const, message: toolMsg('n0', bigText) }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    // After undo: [c0, undo-marker]; then n0 appended → [c0, undo-marker, n0].
+    // Clamp made cutoff = min(3, 2) = 2, so n0 (index 2) is NOT blanked.
+    // c0 (index 0 < 2) IS still blanked (the still-valid prefix).
+    expect(proj.messages.map((m) => m.source)).toEqual(['append_message', 'undo', 'append_message']);
+    expect(proj.messages[0]!.message.content).toEqual([{ type: 'text', text: '[Old tool result content cleared]' }]);
+    expect(proj.messages[2]!.message.content[0]).toMatchObject({ text: bigText });
+  });
+
+  it('accumulates goal state from goal.create/update and clears on goal.clear', () => {
+    const base = [
+      { lineNo: 1, data: { type: 'goal.create' as const, goalId: 'g1', objective: 'ship it', completionCriterion: 'tests green' }, raw: {} },
+      { lineNo: 2, data: { type: 'goal.update' as const, status: 'active', turnsUsed: 3, actor: 'model' }, raw: {} },
+    ];
+    const proj = projectContext(base as any);
+    expect(proj.goal).toMatchObject({ goalId: 'g1', objective: 'ship it', status: 'active', turnsUsed: 3, actor: 'model' });
+
+    const cleared = projectContext([...base, { lineNo: 3, data: { type: 'goal.clear' as const }, raw: {} }] as any);
+    expect(cleared.goal).toBeNull();
+  });
+
+  it('tracks swarm mode enter/exit', () => {
+    const enter = projectContext([{ lineNo: 1, data: { type: 'swarm_mode.enter' as const, trigger: 'task' }, raw: {} }] as any);
+    expect(enter.swarm).toEqual({ active: true, trigger: 'task' });
+    const exit = projectContext([
+      { lineNo: 1, data: { type: 'swarm_mode.enter' as const, trigger: 'task' }, raw: {} },
+      { lineNo: 2, data: { type: 'swarm_mode.exit' as const }, raw: {} },
+    ] as any);
+    expect(exit.swarm.active).toBe(false);
+  });
+
+  it('uses the latest step.end usage as the absolute context-token snapshot', () => {
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_loop_event' as const,
+          event: { type: 'step.begin' as const, uuid: 's1', turnId: 't1', step: 0 } }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_loop_event' as const,
+          event: { type: 'step.end' as const, uuid: 's1', turnId: 't1', step: 0,
+            usage: { inputOther: 10, output: 5, inputCacheRead: 2, inputCacheCreation: 3 } } }, raw: {} },
+    ];
+    const proj = projectContext(entries as any);
+    expect(proj.contextTokens).toBe(20); // 10+5+2+3, absolute (not summed across usage.record)
+  });
+
+  // ---- Full-history mode (Unit 6) -------------------------------------------
+  // In 'full' mode the four destructive lifecycle events insert an inline
+  // marker but do NOT mutate/drop the surrounding message list. 'model' mode
+  // (the default) keeps the existing model's-eye behaviour byte-identical.
+
+  it("defaults to 'model' mode when no 2nd arg is passed (compaction drops the prefix)", () => {
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'm0' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'm1' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 3, data: { type: 'context.apply_compaction' as const,
+          summary: 'sum', compactedCount: 2, tokensBefore: 100, tokensAfter: 10 }, raw: {} },
+    ];
+    // No 2nd arg → 'model' default: prefix dropped, only the summary remains.
+    const proj = projectContext(entries as any);
+    expect(proj.messages).toHaveLength(1);
+    expect(proj.messages[0]!.source).toBe('compaction_summary');
+  });
+
+  it("full mode keeps the pre-compaction messages plus the summary marker plus the tail", () => {
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'm0' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'm1' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 3, data: { type: 'context.apply_compaction' as const,
+          summary: 'sum', compactedCount: 2, tokensBefore: 100, tokensAfter: 10 }, raw: {} },
+      { lineNo: 4, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'm3' }], toolCalls: [] } }, raw: {} },
+    ];
+    const proj = projectContext(entries as any, 'full');
+    // m0, m1 are KEPT (not dropped), then the summary marker is appended inline,
+    // then the post-compaction tail (m3). Contrast the model-mode test above
+    // which drops the first compactedCount messages.
+    expect(proj.messages.map((m) => m.source)).toEqual([
+      'append_message', 'append_message', 'compaction_summary', 'append_message',
+    ]);
+    expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: 'm0' });
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: 'm1' });
+    expect(proj.messages[2]!.compaction).toEqual({ compactedCount: 2, tokensBefore: 100, tokensAfter: 10 });
+    expect(proj.messages[2]!.message.origin).toEqual({ kind: 'compaction_summary' });
+    expect(proj.messages[3]!.message.content[0]).toMatchObject({ text: 'm3' });
+  });
+
+  it("full mode keeps the undone messages and only appends an undo marker (no splice)", () => {
+    const userMsg = (text: string) => ({
+      role: 'user' as const, content: [{ type: 'text' as const, text }], toolCalls: [],
+      origin: { kind: 'user' as const },
+    });
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: userMsg('u1') }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const,
+          message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'a1' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 3, data: { type: 'context.append_message' as const, message: userMsg('u2') }, raw: {} },
+      { lineNo: 4, data: { type: 'context.undo' as const, count: 1 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any, 'full');
+    // All three messages are KEPT, then an undo marker is appended. The
+    // removedMessageCount still reflects what WOULD have been removed (u2 → 1).
+    expect(proj.messages.map((m) => m.source)).toEqual([
+      'append_message', 'append_message', 'append_message', 'undo',
+    ]);
+    expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: 'u1' });
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: 'a1' });
+    expect(proj.messages[2]!.message.content[0]).toMatchObject({ text: 'u2' });
+    expect(proj.messages[3]!.undo).toEqual({ count: 1, removedMessageCount: 1 });
+    expect(proj.messages[3]!.lineNo).toBe(4);
+  });
+
+  it("full mode keeps pre-clear messages and inserts a 'clear' marker (not emptied)", () => {
+    const entries = [
+      { lineNo: 2, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'a' }], toolCalls: [] } }, raw: {} },
+      { lineNo: 3, data: { type: 'context.clear' as const }, raw: {} },
+      { lineNo: 4, data: { type: 'context.append_message' as const,
+          message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'b' }], toolCalls: [] } }, raw: {} },
+    ];
+    const proj = projectContext(entries as any, 'full');
+    // 'a' KEPT, then a 'clear' marker, then 'b' — not emptied.
+    expect(proj.messages.map((m) => m.source)).toEqual(['append_message', 'clear', 'append_message']);
+    expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: 'a' });
+    expect(proj.messages[1]!.source).toBe('clear');
+    expect(proj.messages[1]!.lineNo).toBe(3);
+    expect(proj.messages[2]!.message.content[0]).toMatchObject({ text: 'b' });
+  });
+
+  it("full mode does NOT blank the tool result on micro-compaction (shows original content)", () => {
+    const bigText = 'x'.repeat(2000); // comfortably above the 100-token min
+    const toolMsg = (id: string, text: string) => ({
+      role: 'tool' as const, content: [{ type: 'text' as const, text }], toolCalls: [], toolCallId: id,
+    });
+    const entries = [
+      { lineNo: 1, data: { type: 'context.append_message' as const, message: toolMsg('c0', bigText) }, raw: {} },
+      { lineNo: 2, data: { type: 'context.append_message' as const, message: toolMsg('c1', bigText) }, raw: {} },
+      { lineNo: 3, data: { type: 'micro_compaction.apply' as const, cutoff: 1 }, raw: {} },
+    ];
+    const proj = projectContext(entries as any, 'full');
+    // In 'model' mode index 0 would be blanked; in 'full' mode the original
+    // content is preserved.
+    expect(proj.messages[0]!.message.content[0]).toMatchObject({ text: bigText });
+    expect(proj.messages[1]!.message.content[0]).toMatchObject({ text: bigText });
+  });
 });
