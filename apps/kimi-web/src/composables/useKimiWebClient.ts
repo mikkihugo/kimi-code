@@ -1337,6 +1337,7 @@ function formatTime(iso: string, _status: string): string {
     const now = Date.now();
     const diffMs = now - d.getTime();
     const diffH = diffMs / 3600000;
+    if (diffMs < 60000) return i18n.global.t('sessions.justNow');
     if (diffH < 1) return `${Math.round(diffMs / 60000)}m`;
     if (diffH < 24) return `${Math.round(diffH)}h`;
     return d.toLocaleDateString(i18n.global.locale.value, {

@@ -6,4 +6,5 @@ export default {
   emptyNone: 'No sessions yet',
   emptyNoMatch: 'No matching sessions',
   footerHint: '↑↓ to navigate · Enter to switch · Esc to close',
+  justNow: 'just now',
 } as const;

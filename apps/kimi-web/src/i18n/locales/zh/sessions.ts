@@ -6,4 +6,5 @@ export default {
   emptyNone: '暂无会话',
   emptyNoMatch: '没有匹配的会话',
   footerHint: '↑↓ 切换 · Enter 进入 · Esc 关闭',
+  justNow: '刚刚',
 };
