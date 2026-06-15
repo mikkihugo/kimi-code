@@ -52,14 +52,19 @@ export async function handleVis(deps: VisDeps, opts: VisOptions): Promise<void> 
   const homeDir = deps.getHomeDir();
 
   // Lazily load the embedded single-file SPA so normal `kimi` startup never
-  // pays for it. The module is generated at build time; when it has not been
-  // generated (empty placeholder) the server falls back to its own static
-  // `public/` directory.
-  const { VIS_WEB_GZIP_B64 } = await import('#/generated/vis-web-asset');
-  const webAsset =
-    VIS_WEB_GZIP_B64.length > 0
-      ? { gzipped: new Uint8Array(Buffer.from(VIS_WEB_GZIP_B64, 'base64')) }
-      : undefined;
+  // pays for it. The module is generated at build time (prebuild). When running
+  // from source without a build — e.g. tests — the generated value module is
+  // absent and the dynamic import throws; in that case the server falls back to
+  // its own static `public/` directory.
+  let webAsset: { gzipped: Uint8Array } | undefined;
+  try {
+    const { VIS_WEB_GZIP_B64 } = await import('#/generated/vis-web-asset');
+    if (VIS_WEB_GZIP_B64.length > 0) {
+      webAsset = { gzipped: new Uint8Array(Buffer.from(VIS_WEB_GZIP_B64, 'base64')) };
+    }
+  } catch {
+    // Embedded asset not generated in this context — fall back to filesystem.
+  }
 
   let server: StartedVisServer;
   try {
