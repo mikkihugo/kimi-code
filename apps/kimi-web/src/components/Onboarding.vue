@@ -6,10 +6,10 @@
 import { ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { availableLocales, setLocale, type LocaleCode } from '../i18n';
-import type { Accent, Theme } from '../composables/useKimiWebClient';
+import type { Theme } from '../composables/useKimiWebClient';
 
-const props = defineProps<{ theme: Theme; accent?: Accent }>();
-const emit = defineEmits<{ setTheme: [theme: Theme]; setAccent: [accent: Accent]; complete: []; skip: [] }>();
+const props = defineProps<{ theme: Theme }>();
+const emit = defineEmits<{ setTheme: [theme: Theme]; complete: []; skip: [] }>();
 
 const { t, locale } = useI18n();
 
@@ -18,14 +18,7 @@ function chooseLocale(code: LocaleCode): void {
 }
 
 // Theme is chosen locally and only applied on "Get started".
-// Accent is applied live so the onboarding UI updates immediately.
 const selectedTheme = ref<Theme>(props.theme);
-const selectedAccent = ref<Accent>(props.accent ?? 'blue');
-
-function chooseAccent(a: Accent): void {
-  selectedAccent.value = a;
-  emit('setAccent', a);
-}
 
 function finish(): void {
   if (selectedTheme.value !== props.theme) emit('setTheme', selectedTheme.value);
@@ -111,27 +104,6 @@ function finish(): void {
             <span class="ob-theme-name">{{ t('theme.kimi') }}</span>
             <span class="ob-theme-desc">{{ t('onboarding.kimiDesc') }}</span>
           </button>
-        </div>
-      </section>
-
-      <!-- Accent (the Kimi theme pins its own accent — hide the choice) -->
-      <section v-if="selectedTheme !== 'kimi'" class="ob-sec">
-        <div class="ob-label">{{ t('theme.accentLabel') }}</div>
-        <div class="ob-seg" role="group">
-          <button
-            type="button"
-            class="ob-seg-btn"
-            :class="{ on: selectedAccent === 'blue' }"
-            :aria-pressed="selectedAccent === 'blue'"
-            @click="chooseAccent('blue')"
-          >{{ t('theme.accentBlue') }}</button>
-          <button
-            type="button"
-            class="ob-seg-btn"
-            :class="{ on: selectedAccent === 'mono' }"
-            :aria-pressed="selectedAccent === 'mono'"
-            @click="chooseAccent('mono')"
-          >{{ t('theme.accentMono') }}</button>
         </div>
       </section>
 

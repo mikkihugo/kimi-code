@@ -3,14 +3,14 @@
 <!-- controls as big tappable rows — model (opens ModelPicker), thinking level -->
 <!-- (inline cycle picker), plan mode (toggle), permission (cycle), and a -->
 <!-- read-only context-usage meter — plus the desktop settings-popover prefs -->
-<!-- (theme / accent / language) and the sign-in/out entry, which previously -->
+<!-- (theme / color scheme / language) and the sign-in/out entry, which previously -->
 <!-- had no mobile counterpart. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { ConversationStatus, PermissionMode } from '../types';
 import type { ThinkingLevel } from '../api/types';
-import type { Accent, ColorScheme, Theme } from '../composables/useKimiWebClient';
+import type { ColorScheme, Theme } from '../composables/useKimiWebClient';
 import BottomSheet from './BottomSheet.vue';
 import LanguageSwitcher from './LanguageSwitcher.vue';
 
@@ -25,12 +25,11 @@ const props = withDefaults(
     swarmMode?: boolean;
     theme?: Theme;
     colorScheme?: ColorScheme;
-    accent?: Accent;
     uiFontSize?: number;
     authReady?: boolean;
     betaToc?: boolean;
   }>(),
-  { theme: 'terminal', colorScheme: 'system', accent: 'blue', uiFontSize: 14, authReady: false },
+  { theme: 'terminal', colorScheme: 'system', uiFontSize: 14, authReady: false },
 );
 
 const emit = defineEmits<{
@@ -42,7 +41,6 @@ const emit = defineEmits<{
   setPermission: [mode: PermissionMode];
   setTheme: [theme: Theme];
   setColorScheme: [colorScheme: ColorScheme];
-  setAccent: [accent: Accent];
   setUiFontSize: [size: number];
   setBetaToc: [on: boolean];
   login: [];
@@ -220,30 +218,6 @@ function onLogout(): void {
       </div>
     </div>
 
-    <!-- The Kimi theme pins its interaction accent (kimiDark per the design
-         system), so the accent choice would do nothing — hide it. -->
-    <div v-if="theme !== 'kimi'" class="srow read-only pref">
-      <span class="srow-main">
-        <span class="srow-label">{{ t('theme.accentLabel') }}</span>
-      </span>
-      <div class="seg" role="group" :aria-label="t('theme.accentLabel')">
-        <button
-          type="button"
-          class="seg-opt"
-          :class="{ on: accent === 'blue' }"
-          :aria-pressed="accent === 'blue'"
-          @click="emit('setAccent', 'blue')"
-        >{{ t('theme.accentBlue') }}</button>
-        <button
-          type="button"
-          class="seg-opt"
-          :class="{ on: accent === 'mono' }"
-          :aria-pressed="accent === 'mono'"
-          @click="emit('setAccent', 'mono')"
-        >{{ t('theme.accentMono') }}</button>
-      </div>
-    </div>
-
     <div class="srow read-only pref">
       <span class="srow-main">
         <span class="srow-label">{{ t('sidebar.language') }}</span>
@@ -370,7 +344,7 @@ function onLogout(): void {
 }
 .toggle.on::after { left: 21px; }
 
-/* App preference rows: segmented theme/accent toggles + language switcher. */
+/* App preference rows: segmented theme/color-scheme toggles + language switcher. */
 .srow.pref { cursor: default; }
 .seg {
   display: inline-flex;

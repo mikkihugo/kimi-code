@@ -7,6 +7,9 @@ import ResizeHandle from './components/ResizeHandle.vue';
 import ConversationPane from './components/ConversationPane.vue';
 import FilePreview, { type FileData } from './components/FilePreview.vue';
 import ThinkingPanel from './components/ThinkingPanel.vue';
+import AgentDetailPanel from './components/AgentDetailPanel.vue';
+import SideChatPanel from './components/SideChatPanel.vue';
+import type { AgentMember } from './types';
 import ModelPicker from './components/ModelPicker.vue';
 import ProviderManager from './components/ProviderManager.vue';
 import LoginDialog from './components/LoginDialog.vue';
@@ -177,6 +180,8 @@ function normalizePreviewPath(inputPath: string): { path: string } | { error: st
 async function openFilePreview(target: FilePreviewRequest): Promise<void> {
   thinkingTarget.value = null; // shared right-side slot
   compactionTarget.value = null;
+  agentTarget.value = null;
+  client.closeSideChat();
   // Desktop: surface the preview as a split pane (a peer of chat/files).
   if (!isMobile.value) conversationPaneRef.value?.openPreviewPane();
   const normalized = normalizePreviewPath(target.path);
@@ -267,6 +272,8 @@ function openThinkingPanel(target: { turnId: string; blockIndex: number }): void
   }
   closeFilePreview();
   compactionTarget.value = null;
+  agentTarget.value = null;
+  client.closeSideChat();
   thinkingTarget.value = target;
 }
 
@@ -298,11 +305,62 @@ function openCompactionPanel(target: { turnId: string }): void {
   }
   closeFilePreview();
   thinkingTarget.value = null;
+  agentTarget.value = null;
+  client.closeSideChat();
   compactionTarget.value = target;
 }
 
 function closeCompactionPanel(): void {
   compactionTarget.value = null;
+}
+
+// ---------------------------------------------------------------------------
+// Subagent detail panel — shares the right-side slot too. Opened by clicking a
+// subagent card; resolves the member reactively from the transcript so a still-
+// running subagent keeps streaming its progress here.
+// ---------------------------------------------------------------------------
+const agentTarget = ref<{ turnId: string; blockIndex: number; memberId: string } | null>(null);
+
+const agentPanelMember = computed<AgentMember | null>(() => {
+  const target = agentTarget.value;
+  if (!target) return null;
+  const turn = client.turns.value.find((tn) => tn.id === target.turnId);
+  const blk = turn?.blocks?.[target.blockIndex];
+  if (!blk) return null;
+  if (blk.kind === 'agent') return blk.member.id === target.memberId ? blk.member : null;
+  if (blk.kind === 'agentGroup') return blk.members.find((m) => m.id === target.memberId) ?? null;
+  return null;
+});
+
+const agentPanelVisible = computed(() => agentPanelMember.value !== null);
+
+function openAgentPanel(target: { turnId: string; blockIndex: number; memberId: string }): void {
+  // Clicking the SAME subagent again closes the drawer (toggle).
+  const current = agentTarget.value;
+  if (current && current.turnId === target.turnId && current.memberId === target.memberId) {
+    agentTarget.value = null;
+    return;
+  }
+  closeFilePreview();
+  thinkingTarget.value = null;
+  compactionTarget.value = null;
+  client.closeSideChat();
+  agentTarget.value = target;
+}
+
+function closeAgentPanel(): void {
+  agentTarget.value = null;
+}
+
+// ---------------------------------------------------------------------------
+// Side chat (BTW child session) — also shares the right-side slot.
+// ---------------------------------------------------------------------------
+function openSideChatPanel(prompt?: string): void {
+  closeFilePreview();
+  thinkingTarget.value = null;
+  compactionTarget.value = null;
+  agentTarget.value = null;
+  void client.openSideChat(prompt);
 }
 
 /** Any occupant of the shared right-side slot. */
@@ -311,7 +369,12 @@ function closeCompactionPanel(): void {
 // split layout. Thinking/compaction summaries stay in the side panel always.
 const sidePreviewVisible = computed(() => previewVisible.value && isMobile.value);
 const sidePanelVisible = computed(
-  () => sidePreviewVisible.value || thinkingVisible.value || compactionPanelVisible.value,
+  () =>
+    sidePreviewVisible.value ||
+    thinkingVisible.value ||
+    compactionPanelVisible.value ||
+    agentPanelVisible.value ||
+    client.sideChatVisible.value,
 );
 
 /** True while the panel's resize handle is being dragged — the width
@@ -454,6 +517,33 @@ function handleCommand(cmd: string): void {
     client.compact(cmd.slice('/compact'.length).trim() || undefined);
     return;
   }
+  // `/swarm` toggles swarm mode; `/swarm on|off` sets it; `/swarm <task>` enables
+  // swarm and runs the task right away (TUI parity).
+  if (cmd === '/swarm' || cmd.startsWith('/swarm ')) {
+    const arg = cmd.slice('/swarm'.length).trim();
+    if (arg === 'on') client.setSwarmMode(true);
+    else if (arg === 'off') client.setSwarmMode(false);
+    else if (arg) { client.setSwarmMode(true); void client.sendPrompt(arg); }
+    else client.toggleSwarmMode();
+    return;
+  }
+  // `/goal <objective>` creates a goal (and submits it); `/goal pause|resume|cancel`
+  // controls the active one; bare `/goal` toggles goal mode for the next message.
+  if (cmd === '/goal' || cmd.startsWith('/goal ')) {
+    const arg = cmd.slice('/goal'.length).trim();
+    if (arg === 'pause' || arg === 'resume' || arg === 'cancel') client.controlGoal(arg);
+    else if (arg) void client.createGoal(arg);
+    else client.toggleGoalMode();
+    return;
+  }
+  // `/btw <question>` opens (creating if needed) the side chat and asks it; bare
+  // `/btw` toggles the panel.
+  if (cmd === '/btw' || cmd.startsWith('/btw ')) {
+    const arg = cmd.slice('/btw'.length).trim();
+    if (!arg && client.sideChatVisible.value) client.closeSideChat();
+    else openSideChatPanel(arg || undefined);
+    return;
+  }
   switch (cmd) {
     case '/new':
     case '/clear':
@@ -527,7 +617,7 @@ function handleEditQueued(index: number): void {
   client.unqueue(index);
 }
 
-async function handleSubmit(payload: { text: string; attachments: { fileId: string }[] }): Promise<void> {
+async function handleSubmit(payload: { text: string; attachments: { fileId: string; kind: 'image' | 'video' }[] }): Promise<void> {
   const wsId = client.activeWorkspaceId.value;
   if (!client.activeSessionId.value && wsId) {
     await client.startSessionAndSendPrompt(wsId, payload.text, payload.attachments);
@@ -577,6 +667,7 @@ function openPr(url: string): void {
         :groups="client.workspaceGroups.value"
         :active-id="client.activeSessionId.value"
         :attention-by-session="client.attentionBySession.value"
+        :pending-by-session="client.pendingBySession.value"
         :unread-by-session="client.unreadBySession.value"
         @select="client.selectSession($event)"
         @create="handleCreateSession"
@@ -703,6 +794,7 @@ function openPr(url: string): void {
       @open-media="openMediaPreview($event)"
       @open-thinking="openThinkingPanel($event)"
       @open-compaction="openCompactionPanel($event)"
+      @open-agent="openAgentPanel($event)"
       @edit-message="handleEditMessage"
     />
 
@@ -745,6 +837,19 @@ function openPr(url: string): void {
         :subtitle="t('conversation.summaryTitle')"
         @close="closeCompactionPanel"
       />
+      <AgentDetailPanel
+        v-else-if="agentPanelVisible && agentPanelMember"
+        :member="agentPanelMember"
+        @close="closeAgentPanel"
+      />
+      <SideChatPanel
+        v-else-if="client.sideChatVisible.value"
+        :turns="client.sideChatTurns.value"
+        :running="client.sideChatRunning.value"
+        :sending="client.sideChatSending.value"
+        @send="client.sendSideChatPrompt($event)"
+        @close="client.closeSideChat()"
+      />
       <FilePreview
         v-else-if="sidePreviewVisible"
         :file="previewFile"
@@ -776,7 +881,6 @@ function openPr(url: string): void {
       v-if="showSettings"
       :theme="client.theme.value"
       :color-scheme="client.colorScheme.value"
-      :accent="client.accent.value"
       :ui-font-size="client.uiFontSize.value"
       :auth-ready="client.authReady.value"
       :account-model="client.defaultModel.value"
@@ -785,7 +889,6 @@ function openPr(url: string): void {
       :beta-toc="client.betaToc.value"
       @set-theme="client.setTheme($event)"
       @set-color-scheme="client.setColorScheme($event)"
-      @set-accent="client.setAccent($event)"
       @set-ui-font-size="client.setUiFontSize($event)"
       @set-notify="client.setNotifyOnComplete($event)"
       @set-beta-toc="client.setBetaToc($event)"
@@ -882,9 +985,7 @@ function openPr(url: string): void {
     <Onboarding
       v-if="showOnboarding"
       :theme="client.theme.value"
-      :accent="client.accent.value"
       @set-theme="client.setTheme($event)"
-      @set-accent="client.setAccent($event)"
       @complete="completeOnboarding"
       @skip="completeOnboarding"
     />
@@ -923,7 +1024,6 @@ function openPr(url: string): void {
       :swarm-mode="client.swarmMode.value"
       :theme="client.theme.value"
       :color-scheme="client.colorScheme.value"
-      :accent="client.accent.value"
       :ui-font-size="client.uiFontSize.value"
       :auth-ready="client.authReady.value"
       :beta-toc="client.betaToc.value"
@@ -934,7 +1034,6 @@ function openPr(url: string): void {
       @set-permission="client.setPermission($event)"
       @set-theme="client.setTheme($event)"
       @set-color-scheme="client.setColorScheme($event)"
-      @set-accent="client.setAccent($event)"
       @set-ui-font-size="client.setUiFontSize($event)"
       @set-beta-toc="client.setBetaToc($event)"
       @login="openLogin"

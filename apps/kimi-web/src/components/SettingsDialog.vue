@@ -8,14 +8,13 @@ import { useI18n } from 'vue-i18n';
 import LanguageSwitcher from './LanguageSwitcher.vue';
 import { serverEndpointLabel } from '../api/config';
 import { downloadTraceLog, isTraceEnabled } from '../debug/trace';
-import type { Accent, ColorScheme, Theme } from '../composables/useKimiWebClient';
+import type { ColorScheme, Theme } from '../composables/useKimiWebClient';
 
 const { t } = useI18n();
 
 const props = defineProps<{
   theme: Theme;
   colorScheme: ColorScheme;
-  accent: Accent;
   uiFontSize: number;
   authReady: boolean;
   accountModel?: string | null;
@@ -30,7 +29,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   setTheme: [theme: Theme];
   setColorScheme: [colorScheme: ColorScheme];
-  setAccent: [accent: Accent];
   setUiFontSize: [size: number];
   setNotify: [on: boolean];
   setBetaToc: [on: boolean];
@@ -82,14 +80,6 @@ function exportLog(): void {
               <button type="button" class="opt" :class="{ on: colorScheme === 'light' }" :aria-pressed="colorScheme === 'light'" @click="emit('setColorScheme', 'light')">{{ t('theme.light') }}</button>
               <button type="button" class="opt" :class="{ on: colorScheme === 'dark' }" :aria-pressed="colorScheme === 'dark'" @click="emit('setColorScheme', 'dark')">{{ t('theme.dark') }}</button>
               <button type="button" class="opt" :class="{ on: colorScheme === 'system' }" :aria-pressed="colorScheme === 'system'" @click="emit('setColorScheme', 'system')">{{ t('theme.system') }}</button>
-            </div>
-          </div>
-          <!-- Accent is pinned by the Kimi theme, so hide the choice there. -->
-          <div v-if="theme !== 'kimi'" class="row">
-            <span class="rlabel">{{ t('theme.accentLabel') }}</span>
-            <div class="seg" role="group" :aria-label="t('theme.accentLabel')">
-              <button type="button" class="opt" :class="{ on: accent === 'blue' }" :aria-pressed="accent === 'blue'" @click="emit('setAccent', 'blue')">{{ t('theme.accentBlue') }}</button>
-              <button type="button" class="opt" :class="{ on: accent === 'mono' }" :aria-pressed="accent === 'mono'" @click="emit('setAccent', 'mono')">{{ t('theme.accentMono') }}</button>
             </div>
           </div>
           <div class="row">
