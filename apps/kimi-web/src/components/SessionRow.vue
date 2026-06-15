@@ -172,10 +172,6 @@ defineExpose({ closeMenu, cancelDelete });
           class="tag tag-ask"
           :title="t('workspace.awaitingAnswerTitle')"
         >
-          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6">
-            <path d="M6 6a2 2 0 1 1 2.6 1.9c-.4.15-.6.5-.6.95V10" stroke-linecap="round" />
-            <circle cx="8" cy="12.5" r="0.7" fill="currentColor" stroke="none" />
-          </svg>
           <span class="tag-text">{{ t('workspace.awaitingAnswer') }}</span>
         </span>
         <span
@@ -183,10 +179,6 @@ defineExpose({ closeMenu, cancelDelete });
           class="tag tag-approve"
           :title="t('workspace.awaitingPermissionTitle')"
         >
-          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="3.5" y="7" width="9" height="6" rx="1.2" />
-            <path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7" stroke-linecap="round" />
-          </svg>
           <span class="tag-text">{{ t('workspace.awaitingPermission') }}</span>
         </span>
 
