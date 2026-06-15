@@ -52,12 +52,6 @@ export const WIRE_RENDERERS: RendererMap = {
           <Mono>protocol v{r.protocol_version}</Mono>
           <Dim>·</Dim>
           <Mono>created {new Date(r.created_at).toLocaleString()}</Mono>
-          {r.app_version !== undefined ? <Dim>· app {r.app_version}</Dim> : null}
-          {r.resumed === true ? (
-            <Pill tone="info" variant="outline">
-              resumed
-            </Pill>
-          ) : null}
         </span>
       ),
     }),
