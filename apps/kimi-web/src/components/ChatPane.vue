@@ -449,7 +449,6 @@ function renderBlockKey(block: AssistantRenderBlock, index: number): string {
           <div v-else class="u-text">{{ turn.text }}</div>
         </div>
         <div v-if="turn.createdAt || canEditTurn(turn)" class="u-meta">
-          <div v-if="turn.createdAt" class="u-time">{{ formatMessageTime(turn.createdAt, t('conversation.yesterday')) }}</div>
           <div v-if="canEditTurn(turn)" class="u-edit-wrap" :class="{ undoing: undoingTurnId === turn.id }">
             <button
               v-if="confirmingEditTurnId !== turn.id"
@@ -458,11 +457,11 @@ function renderBlockKey(block: AssistantRenderBlock, index: number): string {
               :title="t('conversation.undo')"
               @click="confirmingEditTurnId = turn.id"
             >
+              <span class="u-edit-text">{{ t('conversation.undo') }}</span>
               <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M6.5 2.5 3 6l3.5 3.5"/>
                 <path d="M3 6h6.5a3.8 3.8 0 1 1 0 7.6H7.5"/>
               </svg>
-              <span>{{ t('conversation.undo') }}</span>
             </button>
             <div v-else class="u-edit-confirm" @click.stop>
               <span>{{ t('conversation.undoConfirm') }}</span>
@@ -482,6 +481,7 @@ function renderBlockKey(block: AssistantRenderBlock, index: number): string {
               </button>
             </div>
           </div>
+          <div v-if="turn.createdAt" class="u-time">{{ formatMessageTime(turn.createdAt, t('conversation.yesterday')) }}</div>
         </div>
       </template>
 
@@ -898,6 +898,13 @@ function renderBlockKey(block: AssistantRenderBlock, index: number): string {
   color: var(--muted);
   white-space: nowrap;
 }
+.u-meta .u-edit-text {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 0.15s ease;
+}
+.u-meta .u-edit:hover .u-edit-text { max-width: 120px; }
 @keyframes undo-bubble-exit {
   0% {
     opacity: 1;
