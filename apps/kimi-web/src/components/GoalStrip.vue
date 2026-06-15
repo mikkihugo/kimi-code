@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import type { AppGoal } from '../api/types';
 
 const props = defineProps<{ goal: AppGoal; forceExpanded?: number }>();
+const emit = defineEmits<{ controlGoal: [action: 'pause' | 'resume' | 'cancel'] }>();
+
+const { t } = useI18n();
 
 const expanded = ref(false);
 
@@ -34,7 +38,7 @@ function formatMs(ms: number): string {
   <section class="goal-strip" :class="{ expanded }">
     <button class="goal-row" type="button" @click="expanded = !expanded">
       <span class="goal-kicker">Goal</span>
-      <span class="goal-objective">{{ goal.objective }}</span>
+      <span class="goal-objective" :class="{ 'expanded-hidden': expanded }">{{ goal.objective }}</span>
       <span class="goal-status" :class="`status-${goal.status}`">{{ goal.status }}</span>
       <span class="goal-progress" aria-hidden="true">
         <span class="goal-progress-fill" :style="{ width: `${tokenPct}%` }"></span>
@@ -64,6 +68,25 @@ function formatMs(ms: number): string {
         <span>{{ goal.tokensUsed.toLocaleString() }} tokens</span>
         <span>{{ formatMs(goal.wallClockMs) }}</span>
         <span v-if="goal.budget.tokenBudget !== null">{{ tokenPct }}% token budget</span>
+      </div>
+      <div class="goal-actions">
+        <button
+          v-if="goal.status !== 'paused'"
+          type="button"
+          class="goal-action"
+          @click.stop="emit('controlGoal', 'pause')"
+        >{{ t('status.goalPause') }}</button>
+        <button
+          v-if="goal.status === 'paused'"
+          type="button"
+          class="goal-action primary"
+          @click.stop="emit('controlGoal', 'resume')"
+        >{{ t('status.goalResume') }}</button>
+        <button
+          type="button"
+          class="goal-action danger"
+          @click.stop="emit('controlGoal', 'cancel')"
+        >{{ t('status.goalCancel') }}</button>
       </div>
     </div>
   </section>
@@ -106,6 +129,10 @@ function formatMs(ms: number): string {
   white-space: nowrap;
   color: var(--ink);
   font-size: 12.5px;
+}
+.goal-objective.expanded-hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 .goal-status {
   flex: none;
@@ -184,6 +211,46 @@ function formatMs(ms: number): string {
   border-radius: 999px;
   padding: 2px 7px;
   background: var(--bg);
+}
+.goal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.goal-action {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  padding: 6px 10px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.goal-action:hover {
+  background: var(--panel2);
+  border-color: var(--bd);
+}
+.goal-action.primary {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: var(--bg);
+}
+.goal-action.primary:hover {
+  background: color-mix(in srgb, var(--blue) 88%, var(--bg));
+}
+.goal-action.danger {
+  border-color: color-mix(in srgb, var(--err) 30%, var(--line));
+  color: var(--err);
+}
+.goal-action.danger:hover {
+  background: color-mix(in srgb, var(--err) 8%, var(--panel));
+  border-color: color-mix(in srgb, var(--err) 45%, var(--line));
 }
 @media (max-width: 640px) {
   .goal-strip {

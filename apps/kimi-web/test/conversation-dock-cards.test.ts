@@ -108,27 +108,45 @@ describe('ConversationPane docked interrupt cards', () => {
 });
 
 describe('ConversationPane dock work panel', () => {
-  it('opens tasks and todos from the dock chips', async () => {
-    const tasks: TaskItem[] = [{
-      id: 'task_1',
-      name: 'Build web',
-      kind: 'task',
-      state: 'run',
-      timing: 'Running',
-    }];
+  it('opens bash, subagent, and todos from the dock chips', async () => {
+    const tasks: TaskItem[] = [
+      {
+        id: 'task_1',
+        name: 'Build web',
+        kind: 'bash',
+        state: 'run',
+        timing: 'Running',
+      },
+      {
+        id: 'task_2',
+        name: 'Review code',
+        kind: 'subagent',
+        state: 'run',
+        timing: 'Running',
+      },
+    ];
     const todos: TodoView[] = [{ title: 'Check mobile dock', status: 'in_progress' }];
     const wrapper = mountPane({ tasks, todos });
 
     expect(wrapper.find('.dock-work-panel').exists()).toBe(false);
 
     const chips = wrapper.findAll('.dock-work-chip');
-    expect(chips).toHaveLength(2);
+    expect(chips).toHaveLength(3);
 
     await chips[0]!.trigger('click');
     expect(wrapper.find('.dock-work-panel').exists()).toBe(true);
-    expect(wrapper.find('tasks-pane-stub').exists()).toBe(true);
+    const bashPane = wrapper.findComponent({ name: 'TasksPane' });
+    expect(bashPane.exists()).toBe(true);
+    expect(bashPane.props('tasks')).toHaveLength(1);
+    expect(bashPane.props('tasks')[0].id).toBe('task_1');
 
     await chips[1]!.trigger('click');
+    const subagentPane = wrapper.findAllComponents({ name: 'TasksPane' }).at(-1);
+    expect(subagentPane).toBeTruthy();
+    expect(subagentPane!.props('tasks')).toHaveLength(1);
+    expect(subagentPane!.props('tasks')[0].id).toBe('task_2');
+
+    await chips[2]!.trigger('click');
     expect(wrapper.find('todo-card-stub').exists()).toBe(true);
   });
 });

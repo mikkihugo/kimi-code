@@ -194,7 +194,7 @@ async function copyTaskOutput(task: TaskItem): Promise<void> {
 .tp-main {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   font-size: 12.5px;
 }
 .tp-row.expandable > .tp-main {
@@ -217,7 +217,7 @@ async function copyTaskOutput(task: TaskItem): Promise<void> {
 .tp-glyph {
   flex: none;
   font-size: 11px;
-  width: 14px;
+  width: 16px;
   text-align: center;
   user-select: none;
 }
@@ -265,7 +265,7 @@ async function copyTaskOutput(task: TaskItem): Promise<void> {
 
 /* Expanded detail: separate code boxes for command and terminal output */
 .tp-detail {
-  margin: 4px 0 0 22px;
+  margin: 4px 0 0 23px;
   display: flex;
   flex-direction: column;
   gap: 4px;

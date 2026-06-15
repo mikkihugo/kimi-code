@@ -267,12 +267,16 @@ watch(
 const bubble = computed(() => props.mobile === true || props.modern === true);
 
 const runningTasks = computed(() => props.tasks.filter((t) => t.state === 'run').length);
+const bashTasks = computed(() => props.tasks.filter((t) => t.kind !== 'subagent'));
+const subagentTasks = computed(() => props.tasks.filter((t) => t.kind === 'subagent'));
+const bashRunning = computed(() => bashTasks.value.filter((t) => t.state === 'run').length);
+const subagentRunning = computed(() => subagentTasks.value.filter((t) => t.state === 'run').length);
 const todoDoneCount = computed(() => (props.todos ?? []).filter((td) => td.status === 'done').length);
 const hasDockWork = computed(() => props.tasks.length > 0 || (props.todos?.length ?? 0) > 0);
-const dockPanel = ref<'tasks' | 'todos' | null>(null);
+const dockPanel = ref<'bash' | 'subagent' | 'todos' | null>(null);
 const changesCount = computed(() => (props.gitInfo ? props.changes?.length ?? 0 : 0));
 
-function toggleDockPanel(panel: 'tasks' | 'todos'): void {
+function toggleDockPanel(panel: 'bash' | 'subagent' | 'todos'): void {
   dockPanel.value = dockPanel.value === panel ? null : panel;
 }
 
@@ -1297,24 +1301,24 @@ onUnmounted(() => {
           @click.stop
         >
           <div class="dock-work-head">
-            <button
-              v-if="tasks.length > 0 || dockPanel === 'tasks'"
-              type="button"
-              class="dock-work-tab"
-              :class="{ on: dockPanel === 'tasks' }"
-              @click="dockPanel = 'tasks'"
+            <span
+              v-if="dockPanel === 'bash'"
+              class="dock-work-tab static"
             >
-              {{ t('tasks.dockTasks') }} · {{ runningTasks }} {{ t('tasks.running') }}
-            </button>
-            <button
-              v-if="(todos?.length ?? 0) > 0 || dockPanel === 'todos'"
-              type="button"
-              class="dock-work-tab"
-              :class="{ on: dockPanel === 'todos' }"
-              @click="dockPanel = 'todos'"
+              {{ t('tasks.dockBash') }} · {{ bashRunning }} {{ t('tasks.running') }}
+            </span>
+            <span
+              v-else-if="dockPanel === 'subagent'"
+              class="dock-work-tab static"
+            >
+              {{ t('tasks.dockSubagent') }} · {{ subagentRunning }} {{ t('tasks.running') }}
+            </span>
+            <span
+              v-else-if="dockPanel === 'todos'"
+              class="dock-work-tab static"
             >
               {{ t('tasks.dockTodos') }} · {{ todoDoneCount }}/{{ todos?.length ?? 0 }}
-            </button>
+            </span>
             <button type="button" class="dock-work-close" :aria-label="t('tasks.closePanel')" @click="closeDockPanel">
               <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
                 <path d="M2 2l8 8M10 2l-8 8" />
@@ -1323,8 +1327,13 @@ onUnmounted(() => {
           </div>
           <div class="dock-work-body">
             <TasksPane
-              v-if="dockPanel === 'tasks'"
-              :tasks="tasks"
+              v-if="dockPanel === 'bash'"
+              :tasks="bashTasks"
+              @cancel="emit('cancelTask', $event)"
+            />
+            <TasksPane
+              v-else-if="dockPanel === 'subagent'"
+              :tasks="subagentTasks"
               @cancel="emit('cancelTask', $event)"
             />
             <TodoCard
@@ -1340,24 +1349,42 @@ onUnmounted(() => {
         v-if="goal"
         :goal="goal"
         :force-expanded="goalExpandSignal"
+        @control-goal="emit('controlGoal', $event)"
       />
       <div v-if="hasDockWork" class="dock-workbar">
         <button
-          v-if="tasks.length > 0"
+          v-if="bashTasks.length > 0"
           type="button"
           class="dock-work-chip"
-          :class="{ on: dockPanel === 'tasks' }"
-          :aria-pressed="dockPanel === 'tasks'"
-          @click="toggleDockPanel('tasks')"
+          :class="{ on: dockPanel === 'bash' }"
+          :aria-pressed="dockPanel === 'bash'"
+          @click="toggleDockPanel('bash')"
         >
           <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <circle cx="8" cy="8" r="5.5" />
             <path d="M8 4.5V8l2.5 1.5" />
           </svg>
-          <span v-if="runningTasks > 0" class="dock-work-pulse" aria-hidden="true"></span>
-          <span>{{ t('tasks.dockTasks') }}</span>
-          <b>{{ tasks.length }}</b>
-          <span v-if="runningTasks > 0" class="dock-work-muted">{{ runningTasks }} {{ t('tasks.running') }}</span>
+          <span v-if="bashRunning > 0" class="dock-work-pulse" aria-hidden="true"></span>
+          <span>{{ t('tasks.dockBash') }}</span>
+          <b>{{ bashTasks.length }}</b>
+          <span v-if="bashRunning > 0" class="dock-work-muted">{{ bashRunning }} {{ t('tasks.running') }}</span>
+        </button>
+        <button
+          v-if="subagentTasks.length > 0"
+          type="button"
+          class="dock-work-chip"
+          :class="{ on: dockPanel === 'subagent' }"
+          :aria-pressed="dockPanel === 'subagent'"
+          @click="toggleDockPanel('subagent')"
+        >
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="8" cy="8" r="5.5" />
+            <path d="M8 4.5V8l2.5 1.5" />
+          </svg>
+          <span v-if="subagentRunning > 0" class="dock-work-pulse" aria-hidden="true"></span>
+          <span>{{ t('tasks.dockSubagent') }}</span>
+          <b>{{ subagentTasks.length }}</b>
+          <span v-if="subagentRunning > 0" class="dock-work-muted">{{ subagentRunning }} {{ t('tasks.running') }}</span>
         </button>
         <button
           v-if="(todos?.length ?? 0) > 0"
@@ -1789,8 +1816,8 @@ onUnmounted(() => {
 }
 .dock-work-panel {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: 16px;
+  right: 16px;
   bottom: 100%;
   z-index: 16;
   display: flex;
@@ -1800,8 +1827,7 @@ onUnmounted(() => {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--bg);
-  box-shadow: 0 -8px 30px rgba(0,0,0,0.12);
+  background: var(--panel);
 }
 .dock-panel-enter-active,
 .dock-panel-leave-active {
@@ -1816,25 +1842,34 @@ onUnmounted(() => {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: transparent;
 }
 .dock-work-tab {
   border: none;
   border-radius: 8px;
   background: none;
   color: var(--muted);
-  padding: 4px 10px;
-  font-family: var(--mono);
-  font-size: 12px;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
 }
-.dock-work-tab:hover,
+.dock-work-tab:hover {
+  color: var(--ink);
+}
 .dock-work-tab.on {
-  background: var(--soft);
-  color: var(--blue2);
+  background: none;
+  color: var(--ink);
+  font-weight: 700;
+}
+.dock-work-tab.static {
+  cursor: default;
+  color: var(--ink);
+  font-weight: 700;
 }
 .dock-work-close {
   margin-left: auto;
@@ -1845,11 +1880,11 @@ onUnmounted(() => {
   border-radius: 8px;
   background: none;
   color: var(--muted);
-  padding: 5px;
+  padding: 4px;
   cursor: pointer;
 }
 .dock-work-close:hover {
-  background: var(--panel2);
+  background: none;
   color: var(--ink);
 }
 .dock-work-body {
@@ -1860,10 +1895,10 @@ onUnmounted(() => {
   overflow: hidden;
 }
 .dock-work-body :deep(.taskspane) {
-  padding: 10px 14px 12px;
+  padding: 10px 12px 12px;
 }
 .dock-work-body :deep(.taskspane .tp-head) {
-  margin-top: 0;
+  display: none;
 }
 .dock-work-body :deep(.todo-card.tab-mode) {
   flex: 1;
@@ -1875,6 +1910,7 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding: 10px 12px 12px;
 }
 
 @media (max-width: 640px) {

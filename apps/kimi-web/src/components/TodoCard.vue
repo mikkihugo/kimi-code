@@ -30,7 +30,7 @@ function toggle(): void {
 const doneCount = computed(() => props.todos.filter((td) => td.status === 'done').length);
 
 function glyph(status: TodoView['status']): string {
-  return status === 'done' ? '✓' : status === 'in_progress' ? '●' : '○';
+  return status === 'done' ? 'done' : status === 'in_progress' ? 'in_progress' : 'pending';
 }
 </script>
 
@@ -53,7 +53,7 @@ function glyph(status: TodoView['status']): string {
     <div v-if="showList" class="tc-list">
       <div v-if="todos.length === 0" class="tc-empty">{{ t('tasks.emptyTodo') }}</div>
       <div v-for="(td, i) in todos" :key="i" class="tc-row" :class="`s-${td.status}`">
-        <span class="tc-glyph">{{ glyph(td.status) }}</span>
+        <span class="tc-glyph" :class="`g-${glyph(td.status)}`" />
         <span class="tc-name">{{ td.title }}</span>
       </div>
     </div>
@@ -77,12 +77,12 @@ function glyph(status: TodoView['status']): string {
   background: transparent;
 }
 .todo-card.tab-mode .tc-head {
-  padding: 8px 14px;
-  font-size: 13px;
+  display: none;
 }
 .todo-card.tab-mode .tc-list {
-  padding: 6px 14px 10px;
+  padding: 6px 12px 10px;
   max-height: none;
+  border-top: none;
 }
 
 .tc-head {
@@ -114,18 +114,57 @@ function glyph(status: TodoView['status']): string {
 
 .tc-list {
   border-top: 1px solid var(--line);
-  padding: 4px 10px 6px;
+  padding: 4px 10px 6px 10px;
   max-height: 40vh;
   overflow-y: auto;
 }
 .tc-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 7px;
+  min-height: 20px;
   padding: 2px 0;
-  line-height: 1.5;
+  line-height: 20px;
 }
-.tc-glyph { flex: none; font-family: var(--mono); }
+.tc-glyph {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  position: relative;
+  background: var(--bg);
+  box-sizing: border-box;
+}
+.tc-glyph.g-done {
+  background: color-mix(in srgb, var(--blue) 75%, var(--panel));
+  border-color: color-mix(in srgb, var(--blue) 75%, var(--panel));
+}
+.tc-glyph.g-done::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 2.5px;
+  width: 4.5px;
+  height: 7.5px;
+  border: solid var(--bg);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(42deg);
+}
+.tc-glyph.g-in_progress {
+  border-color: var(--blue);
+}
+.tc-glyph.g-in_progress::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  background: var(--blue);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
 .tc-name { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
 
 .tc-empty {
@@ -134,11 +173,8 @@ function glyph(status: TodoView['status']): string {
   color: var(--faint);
   font-size: 13px;
 }
-.tc-row.s-pending .tc-glyph { color: var(--faint); }
 .tc-row.s-pending .tc-name { color: var(--muted); }
-.tc-row.s-in_progress .tc-glyph { color: var(--blue); }
 .tc-row.s-in_progress .tc-name { font-weight: 600; }
-.tc-row.s-done .tc-glyph { color: var(--ok); }
 .tc-row.s-done .tc-name { color: var(--faint); text-decoration: line-through; }
 
 /* Mobile (~/todo tab): match the chat font bump and give the collapsible
