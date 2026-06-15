@@ -915,7 +915,6 @@ function renderBlockKey(block: AssistantRenderBlock, index: number): string {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 12px;
   max-width: 84%;
   margin-top: 2px;
   margin-right: 4px;
