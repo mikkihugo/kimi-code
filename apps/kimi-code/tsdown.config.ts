@@ -31,12 +31,6 @@ export default defineConfig({
     [BUILT_IN_CATALOG_DEFINE]: builtInCatalogDefine(),
   },
   deps: {
-    // `@moonshot-ai/*` workspace packages bundle in. `hono` + `@hono/node-server`
-    // are transitive deps of the bundled `@moonshot-ai/vis-server` (pulled in by
-    // `kimi vis`); force-bundle them so the emitted `dist/main.mjs` is fully
-    // self-contained and never `import`s them at runtime.
-    alwaysBundle: [/^@moonshot-ai\//, 'hono', '@hono/node-server'],
-    neverBundle: [],
     onlyBundle: false,
   },
   outputOptions: {
