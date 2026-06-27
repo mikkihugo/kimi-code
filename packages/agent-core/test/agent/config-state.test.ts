@@ -75,6 +75,8 @@ describe('ConfigState model capabilities', () => {
   });
 
   it('clamps the LLM completion cap to 128k for openai-compatible providers', async () => {
+    vi.stubEnv('KIMI_MODEL_MAX_COMPLETION_TOKENS', '');
+    vi.stubEnv('KIMI_MODEL_MAX_TOKENS', '');
     let requestMaxTokens: unknown;
     const ctx = testAgent({
       generate: async (provider) => {
