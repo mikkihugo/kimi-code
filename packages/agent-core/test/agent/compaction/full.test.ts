@@ -1639,8 +1639,9 @@ describe('FullCompaction', () => {
   });
 
   it('compacts provider overflow when model context size is unknown', async () => {
+    clearCompletionBudgetEnv();
     let callCount = 0;
-    const compactionMaxCompletionTokens: unknown[] = [];
+    const compactionMaxCompletionTokens: Array<number | undefined> = [];
     const generate: GenerateFn = async (provider, _system, _tools, _history, callbacks) => {
       callCount += 1;
       if (callCount === 1) {
@@ -1667,10 +1668,10 @@ describe('FullCompaction', () => {
     const providerManager = ctx.agent.modelProvider;
     if (providerManager === undefined) throw new Error('Expected provider manager');
     const resolveProviderConfig = providerManager.resolveProviderConfig.bind(providerManager);
-    providerManager.resolveProviderConfig = (model) => ({
+    vi.spyOn(providerManager, 'resolveProviderConfig').mockImplementation((model) => ({
       ...resolveProviderConfig(model),
       modelCapabilities: UNKNOWN_CAPABILITY,
-    });
+    }));
     expect(ctx.agent.config.modelCapabilities.max_context_tokens).toBe(0);
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.newEvents();
@@ -1704,9 +1705,10 @@ describe('FullCompaction', () => {
   });
 
   it('honors completion budget env hard caps during compaction', async () => {
+    vi.stubEnv('KIMI_MODEL_MAX_TOKENS', '');
     vi.stubEnv('KIMI_MODEL_MAX_COMPLETION_TOKENS', '8192');
     let callCount = 0;
-    const compactionMaxCompletionTokens: unknown[] = [];
+    const compactionMaxCompletionTokens: Array<number | undefined> = [];
     const generate: GenerateFn = async (provider, _system, _tools, _history, callbacks) => {
       callCount += 1;
       if (callCount === 1) {
@@ -1738,9 +1740,10 @@ describe('FullCompaction', () => {
   });
 
   it('honors completion budget env opt-out during compaction', async () => {
+    vi.stubEnv('KIMI_MODEL_MAX_TOKENS', '');
     vi.stubEnv('KIMI_MODEL_MAX_COMPLETION_TOKENS', '0');
     let callCount = 0;
-    const compactionMaxCompletionTokens: unknown[] = [];
+    const compactionMaxCompletionTokens: Array<number | undefined> = [];
     const generate: GenerateFn = async (provider, _system, _tools, _history, callbacks) => {
       callCount += 1;
       if (callCount === 1) {
@@ -1772,8 +1775,9 @@ describe('FullCompaction', () => {
   });
 
   it('honors maxOutputSize from model config during compaction', async () => {
+    clearCompletionBudgetEnv();
     let callCount = 0;
-    const compactionMaxCompletionTokens: unknown[] = [];
+    const compactionMaxCompletionTokens: Array<number | undefined> = [];
     const generate: GenerateFn = async (provider, _system, _tools, _history, callbacks) => {
       callCount += 1;
       if (callCount === 1) {
@@ -1812,8 +1816,9 @@ describe('FullCompaction', () => {
   });
 
   it('uses default 128k hardCap when maxOutputSize is not configured', async () => {
+    clearCompletionBudgetEnv();
     let callCount = 0;
-    const compactionMaxCompletionTokens: unknown[] = [];
+    const compactionMaxCompletionTokens: Array<number | undefined> = [];
     const generate: GenerateFn = async (provider, _system, _tools, _history, callbacks) => {
       callCount += 1;
       if (callCount === 1) {
@@ -2069,12 +2074,18 @@ function oauthTestAgentOptions(
   };
 }
 
-function providerMaxCompletionTokens(provider: Parameters<GenerateFn>[0]): unknown {
-  return (
+function clearCompletionBudgetEnv() {
+  vi.stubEnv('KIMI_MODEL_MAX_COMPLETION_TOKENS', '');
+  vi.stubEnv('KIMI_MODEL_MAX_TOKENS', '');
+}
+
+function providerMaxCompletionTokens(provider: Parameters<GenerateFn>[0]): number | undefined {
+  const value = (
     provider as {
       readonly modelParameters?: Record<string, unknown>;
     }
   ).modelParameters?.['max_completion_tokens'];
+  return typeof value === 'number' ? value : undefined;
 }
 
 function textResult(text: string): Awaited<ReturnType<GenerateFn>> {

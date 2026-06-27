@@ -92,19 +92,22 @@ export function parseDeepSeekInlineToolCalls(content: string): ToolCall[] {
  */
 export class DeepSeekInlineToolCallFilter {
   private buffer = '';
-  private full = '';
+  private captured = '';
   private suppressing = false;
   private passthrough = false;
 
   /** Feed a content delta; returns the text safe to yield now (possibly empty). */
   push(delta: string): string {
-    this.full += delta;
     if (this.passthrough) return delta;
-    if (this.suppressing) return '';
+    if (this.suppressing) {
+      this.captured += delta;
+      return '';
+    }
     this.buffer += delta;
     const idx = firstBlockStart(this.buffer);
     if (idx >= 0) {
       const out = this.buffer.slice(0, idx);
+      this.captured = this.buffer.slice(idx);
       this.suppressing = true;
       this.buffer = '';
       return out;
@@ -153,6 +156,6 @@ export class DeepSeekInlineToolCallFilter {
 
   /** Full accumulated content (for parsing). */
   get content(): string {
-    return this.full;
+    return this.captured;
   }
 }

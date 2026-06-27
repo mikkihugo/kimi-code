@@ -80,6 +80,17 @@ describe('DeepSeekInlineToolCallFilter', () => {
     expect(f.sawToolBlock).toBe(false);
   });
 
+  it('does not retain normal streamed text when no block is seen', () => {
+    const f = new DeepSeekInlineToolCallFilter();
+    let out = '';
+    out += f.push('This is a long normal response with no inline tool marker. ');
+    out += f.push('It should stream through without keeping a duplicate copy.');
+    out += f.flush();
+    expect(out).toBe('This is a long normal response with no inline tool marker. It should stream through without keeping a duplicate copy.');
+    expect(f.sawToolBlock).toBe(false);
+    expect(f.content).toBe('');
+  });
+
   it('emits text before the block and suppresses the tokens', () => {
     const f = new DeepSeekInlineToolCallFilter();
     const content = `Reading now. ${wrap(callBlock('read_file', '{"path":"a.js"}'))}`;
